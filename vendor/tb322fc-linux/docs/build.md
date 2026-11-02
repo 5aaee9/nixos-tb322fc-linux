@@ -34,9 +34,12 @@ patches, and verifies each resulting Git tree. No unpublished commit is needed.
 Existing source directories are never reset or overwritten. To fetch just the
 kernel and topology macros, pass `kernel audioreach-topology wireless-regdb` as arguments.
 
-The kernel is pinned to `b0c05eb72e10140f87efd0e499ad840e6c3e6975`, one
-device-support commit above Linux 7.2. Patched userspace source trees intentionally
-have staged changes; their expected post-patch trees are in the manifest.
+The kernel base is official Linux 7.2 at
+`8d3ae59288f1e7d58d76558a6ee96d533bc5019f`. The locally maintained
+[kernel patch series](../patches/kernel/README.md) recreates the tested elden
+source tree without fetching a third-party kernel fork. Patched kernel and
+userspace source trees intentionally have staged changes; their expected
+post-patch trees are in the manifest.
 
 ## Firmware and topology
 

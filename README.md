@@ -11,7 +11,9 @@ does not provide a partition installer or a bootloader unlock procedure.
 ## Current status
 
 The tested configuration uses pinned NixOS 26.05, GNOME on Wayland and the
-direct elden kernel baseline. As of the November 1, 2026 test:
+elden kernel baseline. Kernel sources come from a fixed official Linux commit
+with [device patches maintained here](vendor/tb322fc-linux/patches/kernel/README.md).
+As of the November 1, 2026 test:
 
 | Component | Evidence |
 | --- | --- |
@@ -59,8 +61,11 @@ private investigation notes stay untracked. See the
 ## Source attribution
 
 The reference integration snapshot is recorded at commit
-`473f3e075cf328e094db3e79721fefeed248d42b`; its kernel input is
-`GEEKiDoS/linux@b0c05eb72e10140f87efd0e499ad840e6c3e6975`.
+`473f3e075cf328e094db3e79721fefeed248d42b`. The initial kernel patch preserves
+the device support and attribution from
+`GEEKiDoS/linux@b0c05eb72e10140f87efd0e499ad840e6c3e6975`. Builds fetch
+the official Linux base and apply the local patch series; the third-party
+kernel repository is only a provenance reference.
 Exact external source pins are in
 [`sources.json`](vendor/tb322fc-linux/sources.json).
 The vendored [license](vendor/tb322fc-linux/LICENSE) and component notices

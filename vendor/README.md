@@ -4,7 +4,11 @@ This directory contains the direct Y700 Gen 4 reference integration snapshot,
 with local USB/NBD, firmware-manifest and firewall build adaptations.
 
 - `tb322fc-linux`: `473f3e075cf328e094db3e79721fefeed248d42b`
-- kernel input: `GEEKiDoS/linux@b0c05eb72e10140f87efd0e499ad840e6c3e6975`
+- kernel base: official Linux `8d3ae59288f1e7d58d76558a6ee96d533bc5019f`
+- kernel patches: maintained in
+  [`tb322fc-linux/patches/kernel/`](tb322fc-linux/patches/kernel/README.md);
+  the initial patch preserves the tested device-support tree and attribution
+  from `GEEKiDoS/linux@b0c05eb72e10140f87efd0e499ad840e6c3e6975`
 
 The vendored license and component notices are retained. Downloaded sources,
 firmware and build artifacts are excluded from Git. The original hardware

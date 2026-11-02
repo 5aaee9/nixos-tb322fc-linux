@@ -7,7 +7,13 @@ hardware matrix and `validation.json`.
 ## Inputs
 
 - Hardware: TB322FC / elden, SM8750, 16 GB RAM and 512 GB storage.
-- Kernel source: `GEEKiDoS/linux@b0c05eb72e10140f87efd0e499ad840e6c3e6975`.
+- Tested kernel tree: `abb1b30a2ef5c0a7fc5e3e4ed35bbefb02462da4`, originally
+  supplied by `GEEKiDoS/linux@b0c05eb72e10140f87efd0e499ad840e6c3e6975`.
+- Current source packaging: official Linux
+  `8d3ae59288f1e7d58d76558a6ee96d533bc5019f` plus the
+  [local kernel patches](../../vendor/tb322fc-linux/patches/kernel/README.md).
+  The resulting tree is identical to the tested kernel tree. This packaging
+  check does not claim a new image build or device test.
 - Nixpkgs: `da6dc0e7b26060f2f71ce3ef7088fb56ee44fa36`.
 - Firmware inventory: `vendor/tb322fc-linux/firmware-tb322fc-prc.json`,
   78 files checked against the matching stock inputs.

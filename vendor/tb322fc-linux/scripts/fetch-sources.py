@@ -21,6 +21,16 @@ def main():
         if name not in manifest:
             parser.error(f"unknown component: {name}")
         source = manifest[name]
+        if "patch" in source and "patches" in source:
+            parser.error(f"{name}: use either patch or patches, not both")
+        patches = source.get(
+            "patches", [source["patch"]] if source.get("patch") else [])
+        if not isinstance(patches, list) or any(
+                not isinstance(patch, str) for patch in patches):
+            parser.error(f"{name}: patches must be an ordered list of paths")
+        for patch in patches:
+            if not (ROOT / patch).is_file():
+                parser.error(f"{name}: missing patch: {patch}")
         destination = ROOT / "sources" / name
         if destination.exists():
             raise SystemExit(f"{destination} already exists; preserve or remove it explicitly")
@@ -30,8 +40,11 @@ def main():
         git(destination, "remote", "add", "origin", source["url"])
         git(destination, "fetch", "--quiet", "--depth=1", "origin", source["commit"])
         git(destination, "checkout", "--quiet", "--detach", "FETCH_HEAD")
-        if source.get("patch"):
-            git(destination, "apply", "--index", str(ROOT / source["patch"]))
+        if source.get("base_tree") and (
+                git(destination, "rev-parse", "HEAD^{tree}") != source["base_tree"]):
+            raise SystemExit(f"{name}: upstream tree does not match sources.json")
+        for patch in patches:
+            git(destination, "apply", "--index", str(ROOT / patch))
         if git(destination, "write-tree") != source["tree"]:
             raise SystemExit(f"{name}: source tree does not match sources.json")
         print(f"Verified {name}: {source['tree']}", flush=True)

@@ -9,7 +9,8 @@ integration. It does not serve as a device backup or artifact archive.
 - The power-key event reader, gesture tests and desktop API adapter.
 - Host-side build, firmware-import and temporary boot tooling.
 - The vendored reference scripts, kernel/BusyBox configuration, source
-  manifests, userspace patches, audio routing/topology source and licenses.
+  manifests, locally maintained kernel/userspace patches, audio
+  routing/topology source and licenses.
 - Firmware destination names, byte counts and SHA-256 inventories. These
   inventories contain no firmware payload or sensor calibration.
 - Public instructions and a scoped hardware status record.

@@ -1,7 +1,11 @@
 {
   "kernel": {
-    "url": "https://github.com/GEEKiDoS/linux.git",
-    "commit": "b0c05eb72e10140f87efd0e499ad840e6c3e6975",
+    "url": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git",
+    "commit": "8d3ae59288f1e7d58d76558a6ee96d533bc5019f",
+    "base_tree": "a25d6a94ad99aa059aa6dc728c45052fb2968352",
+    "patches": [
+      "patches/kernel/0001-y700-gen4-support.patch"
+    ],
     "tree": "abb1b30a2ef5c0a7fc5e3e4ed35bbefb02462da4"
   },
   "libcamera": {

@@ -4,9 +4,10 @@ Mainline Linux for the Lenovo Legion Tab Y700 Gen4, based on Qualcomm SM8750
 (Snapdragon 8 Elite), device codename **elden**.
 
 This repository provides the kernel configuration, boot-image builder, rootfs
-integration, firmware inventory and hardware support status. Kernel development
-lives in [GEEKiDoS/linux](https://github.com/GEEKiDoS/linux/tree/v7.2-elden).
-Userspace changes are included as patches against pinned public sources.
+integration, firmware inventory and hardware support status.
+[Kernel patches](patches/kernel/README.md) are maintained in this repository
+and applied to a fixed official Linux commit. Userspace changes are also
+included as patches against pinned public sources.
 
 The hardware table and support matrix preserve the reference project's
 machine-validation record. The parent project's NixOS USB/NBD integration has
@@ -52,7 +53,7 @@ sensor calibration stays with your device. No prebuilt rootfs release is supplie
 | Path | Purpose |
 | --- | --- |
 | [`sources.json`](sources.json) | Public source URLs, exact commits and expected trees |
-| [`patches/`](patches) | Libcamera, hexagonrpc and iio-sensor-proxy changes |
+| [`patches/`](patches) | Local kernel series and libcamera, hexagonrpc and iio-sensor-proxy changes |
 | [`configs/`](configs) | Kernel, BusyBox, command line and initramfs layout |
 | [`initramfs/`](initramfs) | Rootfs selection and handoff |
 | [`rootfs/`](rootfs) | Audio, sensor and camera integration files |

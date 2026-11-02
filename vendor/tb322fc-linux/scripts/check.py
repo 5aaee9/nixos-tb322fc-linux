@@ -18,7 +18,9 @@ def main():
     for path in files:
         text = path.read_text()
         relative = str(path.relative_to(ROOT))
-        if experiment.search(relative) or experiment.search(text):
+        # Preserve historical messages and attribution inside imported patches.
+        if experiment.search(relative) or (
+                path.suffix != ".patch" and experiment.search(text)):
             failures.append(f"experiment label: {relative}")
         if local_path.search(text):
             failures.append(f"private workspace path: {relative}")
@@ -35,8 +37,18 @@ def main():
         assert source["url"].startswith("https://"), name
         assert re.fullmatch(r"[0-9a-f]{40}", source["commit"]), name
         assert re.fullmatch(r"[0-9a-f]{40}", source["tree"]), name
-        if source.get("patch"):
-            assert (ROOT / source["patch"]).is_file(), name
+        if source.get("base_tree"):
+            assert re.fullmatch(r"[0-9a-f]{40}", source["base_tree"]), name
+        assert not ("patch" in source and "patches" in source), name
+        patches = source.get(
+            "patches", [source["patch"]] if source.get("patch") else [])
+        assert isinstance(patches, list), name
+        assert all(isinstance(patch, str) for patch in patches), name
+        assert len(set(patches)) == len(patches), name
+        for patch in patches:
+            path = Path(patch)
+            assert not path.is_absolute() and ".." not in path.parts, name
+            assert (ROOT / path).is_file(), name
     firmware = json.loads((ROOT / "firmware.json").read_text())["files"]
     assert len({item["path"] for item in firmware}) == len(firmware)
     for item in firmware:

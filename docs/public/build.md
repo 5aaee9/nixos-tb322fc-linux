@@ -27,6 +27,11 @@ python3 vendor/tb322fc-linux/scripts/fetch-sources.py \
 ```
 
 Existing source directories are deliberately not reset or overwritten.
+The kernel comes from official Linux plus the ordered
+[local patch series](../../vendor/tb322fc-linux/patches/kernel/README.md).
+The fetcher checks the base and resulting tree identities. An existing checkout
+of the original device commit can remain in use while its tree still matches
+the manifest; a fresh fetch uses the official base and local patches.
 
 ## Firmware
 
