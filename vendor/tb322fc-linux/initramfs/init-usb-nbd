@@ -1,0 +1,156 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Temporary USB RNDIS + read-only NBD rootfs handoff.
+#
+# The host exports the existing NixOS ext4 image over NBD. The image is
+# mounted read-only and an in-memory overlay supplies the writable layer.
+# Nothing in this path writes an Android partition or the host image.
+export PATH=/bin:/sbin
+BB=/bin/busybox
+
+HOST_IP=192.168.42.1
+DEVICE_IP=192.168.42.2/24
+NBD_PORT=10809
+NBD_DEVICE=/dev/nbd0
+
+fail() {
+    echo "USB/NBD rootfs handoff failed: $*" >&2
+    echo "Returning to the installed Android system in 30 seconds." >&2
+    "$BB" sleep 30
+    "$BB" reboot -f
+    echo "Reboot failed; use the hardware power key to recover." >&2
+    while :; do "$BB" sleep 3600; done
+}
+
+"$BB" mount -t proc proc /proc || fail "mount proc"
+"$BB" mount -t sysfs sysfs /sys || fail "mount sysfs"
+"$BB" mount -t devtmpfs devtmpfs /dev || fail "mount devtmpfs"
+
+for option in $("$BB" cat /proc/cmdline); do
+    case "$option" in
+        usb_nbd_host=*) HOST_IP=${option#usb_nbd_host=} ;;
+        usb_nbd_ip=*) DEVICE_IP=${option#usb_nbd_ip=} ;;
+        usb_nbd_port=*) NBD_PORT=${option#usb_nbd_port=} ;;
+    esac
+done
+
+if ! "$BB" grep -q ' /sys/kernel/config ' /proc/mounts; then
+    "$BB" mount -t configfs configfs /sys/kernel/config || fail "mount configfs"
+fi
+
+# Configure a single RNDIS function. Windows has a built-in RNDIS driver, and
+# Linux hosts also handle this function without a second USB configuration.
+G=/sys/kernel/config/usb_gadget/y700
+"$BB" mkdir -p "$G" || fail "create gadget"
+echo 0x18d1 > "$G/idVendor" || fail "set gadget vendor"
+echo 0x4ee7 > "$G/idProduct" || fail "set gadget product"
+echo 0x0200 > "$G/bcdUSB" || fail "set USB version"
+echo 0x0101 > "$G/bcdDevice" || fail "set gadget version"
+"$BB" mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409" \
+    "$G/functions/rndis.usb0" || fail "create gadget strings"
+echo Y700 > "$G/strings/0x409/manufacturer"
+echo "Lenovo Y700 Gen 4 Linux" > "$G/strings/0x409/product"
+echo "TB322FC-linux" > "$G/strings/0x409/serialnumber"
+echo "Temporary NBD rootfs" > "$G/configs/c.1/strings/0x409/configuration"
+echo 250 > "$G/configs/c.1/MaxPower"
+echo 02:00:00:00:00:01 > "$G/functions/rndis.usb0/dev_addr"
+echo 02:00:00:00:00:02 > "$G/functions/rndis.usb0/host_addr"
+# Advertise the compatible ID consumed by Windows' built-in rndiscmp.inf.
+echo 1 > "$G/os_desc/use" || fail "enable Microsoft OS descriptors"
+echo 0xcd > "$G/os_desc/b_vendor_code" || fail "set OS descriptor request"
+echo MSFT100 > "$G/os_desc/qw_sign" || fail "set OS descriptor signature"
+echo RNDIS > "$G/functions/rndis.usb0/os_desc/interface.rndis/compatible_id" ||
+    fail "set RNDIS compatible ID"
+echo 5162001 > "$G/functions/rndis.usb0/os_desc/interface.rndis/sub_compatible_id" ||
+    fail "set RNDIS sub-compatible ID"
+"$BB" ln -s "$G/functions/rndis.usb0" "$G/configs/c.1/rndis.usb0" ||
+    fail "link RNDIS function"
+"$BB" ln -s "$G/configs/c.1" "$G/os_desc/c.1" ||
+    fail "link OS descriptor configuration"
+
+udc=
+for attempt in $("$BB" seq 1 60); do
+    for node in /sys/class/udc/*; do
+        [ -e "$node" ] || continue
+        udc=${node##*/}
+        break
+    done
+    [ -n "$udc" ] && break
+    "$BB" sleep 1
+done
+[ -n "$udc" ] || fail "USB UDC not available"
+echo "$udc" > "$G/UDC" || fail "bind RNDIS gadget"
+
+net_if=
+for attempt in $("$BB" seq 1 60); do
+    # The kernel also creates virtual NICs. Use this function's actual NIC.
+    candidate=$("$BB" cat "$G/functions/rndis.usb0/ifname") ||
+        fail "read RNDIS interface name"
+    if [ -n "$candidate" ] && [ -e "/sys/class/net/$candidate" ]; then
+        net_if=$candidate
+        break
+    fi
+    "$BB" sleep 1
+done
+[ -n "$net_if" ] || fail "RNDIS network interface not available"
+"$BB" ip link set "$net_if" up || fail "bring up $net_if"
+"$BB" ip addr add "$DEVICE_IP" dev "$net_if" || fail "assign $DEVICE_IP"
+echo "USB/NBD interface $net_if at $DEVICE_IP; server $HOST_IP:$NBD_PORT"
+
+# The client daemonizes after it attaches the socket to the kernel NBD device.
+# Retry only after the previous client has exited; this keeps one connection
+# owner while the Windows host is still enumerating the RNDIS adapter.
+"$BB" mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run ||
+    fail "mount run"
+nbd_ready=
+nbd_pid=
+for attempt in $("$BB" seq 1 120); do
+    if [ -r /sys/block/nbd0/size ] &&
+        [ "$("$BB" cat /sys/block/nbd0/size)" -gt 0 ] 2>/dev/null; then
+        nbd_ready=1
+        break
+    fi
+    if [ -z "$nbd_pid" ] || ! "$BB" kill -0 "$nbd_pid" 2>/dev/null; then
+        "$BB" nbd-client -t 30 "$HOST_IP" "$NBD_PORT" "$NBD_DEVICE" \
+            >/run/nbd-client.log 2>&1 &
+        nbd_pid=$!
+    fi
+    "$BB" sleep 1
+done
+[ -n "$nbd_ready" ] || fail "NBD server $HOST_IP:$NBD_PORT unavailable"
+
+"$BB" mkdir -p /lower /overlay/upper /overlay/work /newroot
+"$BB" mount -t ext4 -o ro,noatime "$NBD_DEVICE" /lower ||
+    fail "mount NBD rootfs"
+
+# systemd and GNOME need writable state. The upper layer is deliberately
+# temporary and disappears when the tablet reboots back to Android.
+"$BB" mount -t tmpfs -o mode=0755,nosuid,nodev,size=2G rootfs-overlay /overlay ||
+    fail "mount overlay tmpfs"
+"$BB" mkdir -p /overlay/upper /overlay/work
+"$BB" mount -t overlay overlay \
+    -o lowerdir=/lower,upperdir=/overlay/upper,workdir=/overlay/work /newroot ||
+    fail "mount rootfs overlay"
+# NixOS uses an absolute store symlink. Before switch_root, prefix its target
+# with /newroot so the check does not resolve against the initramfs.
+init_target=$("$BB" readlink /newroot/sbin/init) || fail "read NixOS init symlink"
+case "$init_target" in
+    /nix/store/*/init)
+        [ -x "/newroot$init_target" ] || fail "rootfs lacks NixOS init"
+        ;;
+    *) fail "unexpected NixOS init target" ;;
+esac
+
+# Keep early firmware available across switch_root without modifying /usr.
+"$BB" mkdir -p /run/firmware
+"$BB" cp -a /lib/firmware/. /run/firmware/ || fail "retain firmware"
+echo /run/firmware > /sys/module/firmware_class/parameters/path ||
+    fail "set firmware path"
+
+"$BB" mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run
+for filesystem in dev proc sys run; do
+    "$BB" mount --move "/$filesystem" "/newroot/$filesystem" ||
+        fail "move $filesystem"
+done
+exec "$BB" switch_root /newroot /sbin/init
+fail "switch_root returned"

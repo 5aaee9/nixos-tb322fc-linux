@@ -1,0 +1,6 @@
+/build/
+/inputs/
+/artifacts/
+/sources/
+__pycache__/
+*.pyc

@@ -1,0 +1,2 @@
+# libcamera uses the system DMA heap for software-ISP output buffers.
+SUBSYSTEM=="dma_heap", KERNEL=="system", GROUP="video", MODE="0660", TAG+="uaccess"

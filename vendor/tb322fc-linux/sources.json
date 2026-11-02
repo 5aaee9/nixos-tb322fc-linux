@@ -1,0 +1,40 @@
+{
+  "kernel": {
+    "url": "https://github.com/GEEKiDoS/linux.git",
+    "commit": "b0c05eb72e10140f87efd0e499ad840e6c3e6975",
+    "tree": "abb1b30a2ef5c0a7fc5e3e4ed35bbefb02462da4"
+  },
+  "libcamera": {
+    "url": "https://gitlab.freedesktop.org/camera/libcamera.git",
+    "commit": "a6ef49cd8c4b280d74dcaedf99a754dc2018ad92",
+    "tree": "0c47716a95b8d0d347d618af50009f045c3382e4",
+    "patch": "patches/libcamera.patch"
+  },
+  "hexagonrpc": {
+    "url": "https://github.com/linux-msm/hexagonrpc.git",
+    "commit": "598b591ae9da6a6cfe2ca5ea78998019ca6395ea",
+    "tree": "a730bca2b0c9f623cd1fde161efa9dcdccc658ee",
+    "patch": "patches/hexagonrpc.patch"
+  },
+  "iio-sensor-proxy": {
+    "url": "https://gitlab.freedesktop.org/hadess/iio-sensor-proxy.git",
+    "commit": "0085ddf8ecb173a1c5fcf2344aa40e561125354f",
+    "tree": "a79db2cf056093b0e2e5074c6d1c481cc4b0c7b1",
+    "patch": "patches/iio-sensor-proxy.patch"
+  },
+  "libssc": {
+    "url": "https://codeberg.org/DylanVanAssche/libssc.git",
+    "commit": "54dd13e36d65c21263cf5b0f4a70c230a77b26bc",
+    "tree": "510539c1e58e870d50311742ec8caa37f99bd504"
+  },
+  "audioreach-topology": {
+    "url": "https://github.com/linux-msm/audioreach-topology.git",
+    "commit": "e7b20b2b16cdda18eb8ae143c8d95c4815c0288e",
+    "tree": "97ceee6fd95f7c734e29cd289be6f971376477a1"
+  },
+  "wireless-regdb": {
+    "url": "https://git.kernel.org/pub/scm/linux/kernel/git/wens/wireless-regdb.git",
+    "commit": "b488e68eb1ca0a0dcdf742c7f4195c7678eafdc5",
+    "tree": "40e2222a02439ae8547b0d3e21c50603ce89ed94"
+  }
+}

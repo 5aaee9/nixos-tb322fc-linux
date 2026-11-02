@@ -1,0 +1,14 @@
+[Unit]
+Description=Qualcomm ADSP sensor registry service
+Requires=dev-fastrpc\x2dadsp\x2dsecure.device
+After=dev-fastrpc\x2dadsp\x2dsecure.device
+Before=iio-sensor-proxy.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/hexagonrpcd -f /dev/fastrpc-adsp-secure -d adsp -s -R /var/lib/hexagonrpc
+Restart=no
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

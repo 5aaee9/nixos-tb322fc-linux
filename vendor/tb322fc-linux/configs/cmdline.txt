@@ -1,0 +1,1 @@
+console=tty0 fbcon=map:0 fbcon=font:TER16x32 loglevel=3 bootconfig init=/init rdinit=/init ro panic=0 efi=noruntime usbcore.autosuspend=-1 fw_devlink=permissive arm-smmu.disable_bypass=0 clk_ignore_unused pd_ignore_unused regulator_ignore_unused initcall_blacklist=clk_disable_unused,regulator_init_complete,genpd_power_off_unused mem_sleep_default=s2idle root=PARTLABEL=rootfs

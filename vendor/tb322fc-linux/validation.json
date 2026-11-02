@@ -1,0 +1,21 @@
+{
+  "kernel_commit": "b0c05eb72e10140f87efd0e499ad840e6c3e6975",
+  "kernel_release": "7.2.0-y700+",
+  "boot_image_sha256": "6e2473a3d00a4d0e1d48590ae921f7cc797ee950bf303d1c43fec5a558899f67",
+  "initramfs_source_sha256": "8703b77414098488e00665496b6aa9ac34cb46b64f536aaebdd261fa28a84e23",
+  "kernel_config_source_sha256": "d23a67270939fec7120144a8603237135f28b14e2e3fc103eaae5bb46a5e6544",
+  "firmware_files_verified": 78,
+  "display_crc_samples": 32,
+  "camera_frames": {
+    "rear": 16,
+    "front": 16
+  },
+  "audio_running_pcm_samples": 30,
+  "sensor_samples": {
+    "accel": 87,
+    "gyro": 88,
+    "ambient_light": 17
+  },
+  "non_rootfs_ufs_readonly": true,
+  "rootfs": "Existing prepared Arch Linux ARM system; clean distribution install not tested."
+}

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Camera
+Comment=Preview and capture from the front or rear camera
+Exec=qcam
+Icon=camera-photo
+Terminal=false
+Categories=AudioVideo;Video;
+StartupNotify=true
