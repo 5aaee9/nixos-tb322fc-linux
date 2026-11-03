@@ -23,20 +23,20 @@ could not be read from the device while it was in fastboot. The template is
 therefore recorded as a versioned public reference, not as proof of the
 current `.229` footer properties.
 
-`tools/sign-boot-avb.py` copies those footer parameters from an external stock
-template and signs a new host-side image with an external private key. The
-template, key and `avbtool` are deliberately outside the project. Example:
+`nix run .#sign-boot-avb` copies footer parameters from an external stock
+template and signs a new host-side image with an external private key.
+Nix supplies pinned avbtool and OpenSSL; the template and key are runtime
+arguments and the key never enters the Nix store. For a new local candidate:
 
 ```sh
-python3 tools/sign-boot-avb.py \
-  --input vendor/tb322fc-linux/artifacts/boot-usb-nbd.img \
-  --template /tmp/y700-stock-boot/TB322_ZUXOS_1.5.10.183.img \
-  --key /tmp/aosp-testkey-bootsigner/tools/pem/testkey_rsa4096.pem \
-  --avbtool /tmp/aosp-testkey-bootsigner/tools/avbtool.py \
-  --output vendor/tb322fc-linux/artifacts/boot-usb-nbd-aosp-testkey.img
+nix run .#sign-boot-avb -- \
+  --input out/boot-usb-nbd/boot.img \
+  --template /private/path/stock-avb-template.img \
+  --key /private/path/authorized-signing-key.pem \
+  --output out/boot-usb-nbd-signed.img
 ```
 
-The resulting candidate is `100663296` bytes and verifies locally with
+The historical `.183`-template candidate was `100663296` bytes and verified locally with
 `avbtool verify_image`; its SHA-256 is recorded in
 `artifacts/AVB-SHA256SUMS`. The candidate retains the USB/NBD kernel payload
 and its boot command line. It is not a replacement for any Android partition.
@@ -59,5 +59,5 @@ NBD connection, kernel log, or rootfs runtime evidence was produced. The
 failure occurs before AVB verification or Linux execution, so an AOSP test-key
 footer does not enable `fastboot boot` while this ABL remains locked.
 
-Do not use `fastboot flashing unlock`, `fastboot flash`, `fastboot erase`, or
-`fastboot set_active` under the current no-write and preserve-Android decision.
+Signing creates a host file only. It does not authorize an unlock, flash,
+erase or active-slot change.

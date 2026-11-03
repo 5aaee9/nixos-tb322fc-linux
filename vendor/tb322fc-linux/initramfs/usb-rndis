@@ -1,0 +1,46 @@
+#!/bin/sh
+# Sourced by the dedicated-root initramfs when y700.usb-debug=1 is present.
+# Use the same RNDIS descriptors as the tested USB/NBD handoff.
+"$BB" mount -t configfs configfs /sys/kernel/config || fail "mount configfs"
+G=/sys/kernel/config/usb_gadget/y700
+"$BB" mkdir -p "$G" || fail "create USB gadget"
+echo 0x18d1 > "$G/idVendor" || fail "USB vendor"
+echo 0x4ee7 > "$G/idProduct" || fail "USB product"
+echo 0x0200 > "$G/bcdUSB" || fail "USB version"
+echo 0x0101 > "$G/bcdDevice" || fail "USB device version"
+"$BB" mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409" \
+    "$G/functions/rndis.usb0" || fail "USB functions"
+echo Y700 > "$G/strings/0x409/manufacturer" || fail "USB manufacturer"
+echo "Lenovo Y700 Gen 4 Linux" > "$G/strings/0x409/product" || fail "USB product name"
+echo "TB322FC-linux" > "$G/strings/0x409/serialnumber" || fail "USB identity"
+echo "Development diagnostics" > "$G/configs/c.1/strings/0x409/configuration" ||
+    fail "USB configuration"
+echo 250 > "$G/configs/c.1/MaxPower" || fail "USB power"
+echo 02:00:00:00:00:01 > "$G/functions/rndis.usb0/dev_addr" || fail "USB device address"
+echo 02:00:00:00:00:02 > "$G/functions/rndis.usb0/host_addr" || fail "USB host address"
+echo 1 > "$G/os_desc/use" || fail "USB OS descriptors"
+echo 0xcd > "$G/os_desc/b_vendor_code" || fail "USB OS request"
+echo MSFT100 > "$G/os_desc/qw_sign" || fail "USB OS signature"
+echo RNDIS > "$G/functions/rndis.usb0/os_desc/interface.rndis/compatible_id" ||
+    fail "USB RNDIS compatible ID"
+echo 5162001 > "$G/functions/rndis.usb0/os_desc/interface.rndis/sub_compatible_id" ||
+    fail "USB RNDIS sub-compatible ID"
+"$BB" ln -s "$G/functions/rndis.usb0" "$G/configs/c.1/rndis.usb0" ||
+    fail "link USB function"
+"$BB" ln -s "$G/configs/c.1" "$G/os_desc/c.1" || fail "link USB OS configuration"
+udc=
+for attempt in $("$BB" seq 1 60); do
+    for node in /sys/class/udc/*; do
+        [ -e "$node" ] || continue
+        [ -z "$udc" ] || fail "multiple USB device controllers"
+        udc=${node##*/}
+    done
+    [ -n "$udc" ] && break
+    "$BB" sleep 1
+done
+[ -n "$udc" ] || fail "USB controller not available"
+echo "$udc" > "$G/UDC" || fail "bind USB gadget"
+net_if=$("$BB" cat "$G/functions/rndis.usb0/ifname") || fail "USB interface name"
+[ -e "/sys/class/net/$net_if" ] || fail "USB interface missing"
+"$BB" ip link set "$net_if" up || fail "USB interface up"
+"$BB" ip addr add 192.168.42.2/24 dev "$net_if" || fail "USB interface address"

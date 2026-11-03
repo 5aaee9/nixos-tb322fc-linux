@@ -1,161 +1,127 @@
-# Build and temporary boot
+# Nix build and temporary boot
 
-Run Linux build commands from this repository's root unless a step explicitly
-changes directory. This guide targets TB322FC / elden with SM8750 and 512 GB
-storage. The Windows boot helper checks the corresponding 16+512 board identity.
-It is not a generic guide for other Y700 generations.
+All board artifacts are built by the pinned flake. The flake is organized with
+`flake-parts` under `nix/modules/` and `nix/packages/`; the host only needs Nix
+with flakes enabled. Device operations remain separate from this build.
 
-## Host and inputs
+The target is TB322FC / `elden` (SM8750, 512 GB). Android and the stock ABL
+remain the recovery path. The build never opens a tablet device and does not
+write a partition.
 
-Use a Linux build host with Nix, Bash, Python 3.11 or later, Git, e2fsprogs,
-util-linux, a C compiler and the
-[kernel build dependencies](../../vendor/tb322fc-linux/docs/build.md#host-dependencies).
-The ARM64 userspace helper additionally needs `qemu-aarch64` at
-`/usr/bin/qemu-aarch64`, unprivileged user/mount namespaces and namespace-local
-binfmt support. This path has been exercised on the development Linux host;
-other host distributions may require equivalent setup.
+## Prepare private inputs
 
-The tablet must already allow `fastboot boot`. Keep its Android recovery path
-and backups. Bootloader unlocking, data resets, repartitioning and persistent
-installation are outside this guide.
-
-Fetch only the pinned sources needed for this boot/rootfs:
+The firmware and stock boot backup are private fixed-output inputs. Arrange the
+matching 78 files using the manifest and import them once:
 
 ```sh
-python3 vendor/tb322fc-linux/scripts/fetch-sources.py \
-  kernel audioreach-topology wireless-regdb
+nix run .#import-device-inputs -- \
+  --firmware /private/path/tb322fc-firmware \
+  --stock-boot /private/path/boot_a.img
 ```
 
-Existing source directories are deliberately not reset or overwritten.
-The kernel comes from official Linux plus the ordered
-[local patch series](../../vendor/tb322fc-linux/patches/kernel/README.md).
-The fetcher checks the base and resulting tree identities. An existing checkout
-of the original device commit can remain in use while its tree still matches
-the manifest; a fresh fetch uses the official base and local patches.
+For an extracted stock directory that has not been arranged yet, use
+`--stock-directory /private/path/extracted-stock` instead of `--firmware`.
+The app builds the pinned AudioReach topology and regulatory database, finds
+files by manifest hashes, and assembles the same canonical firmware archive.
+Only kShimC needs `--stock-boot`; ordinary Linux builds need the firmware input.
 
-## Firmware
+The importer verifies every file and imports canonical archives into the Nix
+store. It rejects mismatched firmware hashes, leaf symlinks and unsafe paths.
+Keep calibration, serials, logs and private keys outside the repository.
 
-Extract the matching stock firmware from your own tablet, preserving its
-directory layout. See the
-[firmware input locations](../../vendor/tb322fc-linux/docs/firmware.md).
-Do not use another device's calibration. Keep extraction logs and any unique
-device data outside the repository.
-
-Build the audio topology and import against the TB322FC manifest:
+A development public SSH key is supplied through a separate public-only flake
+input when needed. The input is copied into the world-readable Nix store; do
+not put a private key there:
 
 ```sh
-(
-  cd vendor/tb322fc-linux
-  mkdir -p build/audio
-  m4 -I sources/audioreach-topology rootfs/audio/topology.m4 \
-    > build/audio/topology.conf
-  alsatplg -c build/audio/topology.conf \
-    -o build/audio/Lenovo-Y700-Gen4-tplg.bin
-  python3 scripts/import-firmware.py \
-    --manifest firmware-tb322fc-prc.json \
-    inputs/stock build/audio sources/wireless-regdb
-)
+nix build .#nixosConfigurations.elden-desktop.config.system.build.toplevel \
+  --override-input device-config path:/private/path/device-config \
+  --no-write-lock-file
 ```
 
-`inputs/stock` is the location for the extracted firmware tree in this
-example. The importer requires all 78 expected hashes before copying anything.
-It refuses conflicting existing payloads. A mismatch means the stock build
-or generated input needs investigation; do not bypass checksum validation.
+Create `/private/path/device-config/default.nix` with
+`{ debugPublicKey = "ssh-ed25519 YOUR_PUBLIC_KEY"; }` and pass the same input
+override to every rootfs, system or EFI build intended for that device. The
+old `Y700_DEBUG_PUBLIC_KEY_FILE` environment variable is no longer read.
 
-## Boot image
+The default `nix/device-config/default.nix` contains no key and installs no
+root authorized key.
+
+AVB signing remains an explicit host-side app so private keys never enter a
+Nix derivation or store: `nix run .#sign-boot-avb -- --help`. It uses pinned
+avbtool/OpenSSL, takes the key and template at runtime and refuses an existing
+output. An AVB signature does not override a locked ABL's fastboot policy.
+
+## Build artifacts
+
+Use the package names below. Sources and build tools are pinned; byte-for-byte
+reproducibility of every artifact is not yet established. Firmware-containing
+outputs stay private.
 
 ```sh
-bash vendor/tb322fc-linux/scripts/build-boot-usb-nbd.sh
-(
-  cd vendor/tb322fc-linux/artifacts
-  sha256sum -c USB-NBD-SHA256SUMS
-)
+nix flake check --all-systems --no-build
+nix flake check
+nix build .#boot-usb-nbd --out-link result-boot-usb-nbd
+nix build .#boot-persistent
+nix build .#rootfs              # persistent ext4 image
+nix build .#rootfs-archive      # registered installation tarball
+nix build .#rootfs-desktop
+nix build .#efi-generation
+nix build .#efi-esp
+nix build .#kshimc-packer .#kshimc-runtime .#boot-kshimc
+nix build .#audio-topology .#wireless-regdb
 ```
 
-This builds the USB/NBD command line, firewall support and embedded firmware
-into an Android header-v4 image at
-`vendor/tb322fc-linux/artifacts/boot-usb-nbd.img`.
-The older `build-boot.sh` default image expects a prepared
-`PARTLABEL=rootfs` partition and is not suitable for this no-write test.
+The outputs are directories in the Nix store. Artifact packages carry hashes
+and metadata; build/check dependencies validate the Android header, ARM64
+kernel/DTB, rootfs ownership,
+Nix store registration, EFI readback and kShimC image layout. `.#openabl` and
+`.#openabl-entry-probe` are offline experiments only; their qtestsign output is
+not an OEM-authenticated ABL and must not be flashed.
 
-## NixOS desktop rootfs
-
-Create a dedicated SSH key outside the repository, or use an existing
-development key. Never place the private key in an image or in Git.
+For an ARM64 host, build directly. On x86_64, the `build-aarch64` app creates a
+namespace-local QEMU/binfmt handler and keeps Nix sandboxing enabled. Use it
+for `rootfs*`, `efi-generation`, `efi-esp` and NixOS system builds. This needs
+unprivileged user/mount namespaces and a local Nix store; a daemon-only host
+can instead use a configured ARM64 builder:
 
 ```sh
-key_dir="$HOME/.local/state/y700-debug"
-install -d -m 700 "$key_dir"
-ssh-keygen -t ed25519 -f "$key_dir/id_ed25519"
-
-Y700_DEBUG_PUBLIC_KEY_FILE="$key_dir/id_ed25519.pub" \
-  bash tools/build-nixos-aarch64.sh "$PWD/result-nixos-desktop" elden-desktop
-
-bash tools/build-nixos-rootfs.sh \
-  "$PWD/result-nixos-desktop" "$PWD/artifacts/nixos-rootfs.ext4"
-
-e2fsck -fn artifacts/nixos-rootfs.ext4
-sha256sum -c artifacts/nixos-rootfs.ext4.sha256
+nix run .#build-aarch64 -- \
+  .#rootfs-desktop --out-link result-rootfs
 ```
 
-The pinned `elden-desktop` configuration enables GNOME automatic login and
-USB-only, key-authenticated root diagnostics. Its `y700` account has an empty
-initial local password. This is a disposable development image, not a
-provisioned production installation.
+The old shell entry points remain compatibility wrappers around these Nix
+packages. They no longer invoke a host compiler, `sudo`, or a mutable source
+checkout. Prefer the flake commands above. `build-nixos-rootfs.sh` now accepts
+`persistent|desktop|base` and an output directory link, rather than an arbitrary
+system path and image filename. Kernel/boot wrappers accept `ARTIFACT_DIR` as
+that new link; the image inside is always named `boot.img`.
 
-The rootfs builder creates a 12 GiB ext4 file and uses `sudo chown` only on
-its staging directory to obtain root-owned system files. It never opens a
-tablet block device and refuses an existing staging directory or image.
-For later builds, choose separate `ROOTFS_STAGE`, `ROOTFS_CLOSURE` and output
-paths. Never rebuild over an image currently exported to the tablet.
+## Inspect and verify
 
-## Temporary Windows-hosted boot
+```sh
+nix path-info -S .#boot-usb-nbd .#rootfs .#efi-esp
+nix flake check
+(cd result-boot-usb-nbd && sha256sum -c SHA256SUMS)
+```
 
-Use Windows Python 3, Android platform-tools and an elevated PowerShell
-window. Make the checkout/images readable from Windows, for example through
-the Linux host's shared filesystem path. Use the actual device serial only
-in the local shell and keep the log directory outside the repository.
+A result link points to a Nix store directory. Do not copy firmware or
+calibration data from another tablet into an output.
 
-First verify the Android model/build, battery and current slot with
-serial-scoped read-only queries, then reboot the verified tablet to its
-bootloader. When it is already in bootloader, run:
+## Temporary fastboot test
+
+Only after the exact image and rootfs have been reviewed, use the existing
+serial-scoped Windows helper:
 
 ```powershell
 .\tools\run-usb-nbd-fastboot.ps1 `
-  -BootImage .\vendor\tb322fc-linux\artifacts\boot-usb-nbd.img `
-  -RootfsImage .\artifacts\nixos-rootfs.ext4 `
+  -BootImage .\result-boot-usb-nbd\boot.img `
+  -RootfsImage .\result-rootfs\nixos-rootfs.ext4 `
   -FastbootSerial $DeviceSerial `
   -ExpectedSlot a `
   -LogDirectory "$env:TEMP\y700-usb-nbd-test"
 ```
 
-Set `$DeviceSerial` to the verified serial before this command. Set
-`-ExpectedSlot` to the current slot read from the device; this argument is a
-check and does not switch slots.
-
-The helper verifies the product, board, unlocked state, bootloader mode and
-slot before issuing one `fastboot boot`. It starts a read-only NBD server,
-identifies the USB gadget, and creates a scoped temporary network/firewall
-configuration. No flash, erase, unlock or slot-change command is issued.
-
-USB uses host `192.168.42.1`, tablet `192.168.42.2` and NBD port `10809`.
-These are fixed development-link addresses, not a saved Wi-Fi configuration.
-SSH accepts the dedicated key from the USB host address only.
-
-Keep USB and the NBD server available until the tablet has returned to
-Android and closed the connection. The helper's observation deadline does
-not terminate an active NBD session. Its cleanup restores the host network
-settings it changed.
-
-## Acceptance
-
-After boot, verify the expected system, GNOME session, active
-`y700-power-key.service`, absence of failed system units and continued NBD
-connectivity. Short press should toggle the display. Hold about two seconds
-for the power menu, then cancel it; releasing the long hold must not also
-toggle the display.
-
-Actual system suspend remains disabled because the USB link supplies the
-root disk. Display-off testing is not suspend/resume testing. An ordinary
-reboot is the tested path back to Android; standalone poweroff retains the
-limits recorded in [status](status.md).
+This path uses one `fastboot boot`, a read-only host NBD export and a temporary
+USB network. It does not flash, erase, change slots or alter Android. Keep the
+NBD server running until the tablet returns to Android.

@@ -21,6 +21,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "usb-gadget-identity.ps1")
 
 # Private logs must be supplied explicitly, outside the public project.
 New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
@@ -110,14 +111,23 @@ if ($python.Name -eq "py.exe") {
 $serverProcess = $null
 $adapter = $null
 $addedAddress = $false
+$addressAttempted = $false
 $originalDhcp = $null
 $firewallRuleName = "Codex TB322FC USB-NBD $PID-$Port"
 $firewallRule = $null
+$bootRequested = $false
+$disconnectVerified = $false
 try {
-    Get-NetAdapter -IncludeHidden |
+    $beforeAdapters = @(Get-NetAdapter -IncludeHidden -ErrorAction Stop)
+    $beforeAdapters |
         Select-Object ifIndex, Name, InterfaceGuid, MacAddress, Status, InterfaceDescription |
         ConvertTo-Json -Depth 4 |
         Set-Content -LiteralPath (Join-Path $LogDirectory "adapters-before.json")
+    if (@($beforeAdapters | Where-Object {
+        $_.Status -eq "Up" -and ($_.MacAddress -replace "[:-]", "") -eq "020000000002"
+    }).Count -ne 0) {
+        throw "A matching gadget is already online; refusing ambiguous device ownership."
+    }
     if (Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue) {
         throw "TCP port $Port is already in use."
     }
@@ -136,6 +146,7 @@ try {
             throw "Unexpected fastboot $($query[0]); stopping before boot."
         }
     }
+    $targetPorts = @(Get-TargetUsbPorts $FastbootSerial)
     $serverProcess = Start-Process -FilePath $python.Source `
         -ArgumentList $serverArgumentString -PassThru -NoNewWindow `
         -RedirectStandardOutput (Join-Path $LogDirectory "nbd.stdout.txt") `
@@ -145,6 +156,7 @@ try {
         throw "NBD server exited before fastboot boot."
     }
 
+    $bootRequested = $true
     $bootReply = Invoke-TargetFastboot "boot" @("boot", $BootImage)
     if ($bootReply -notmatch "Booting\s+OKAY") {
         throw "No explicit fastboot Booting OKAY; inspect state before retrying."
@@ -164,10 +176,7 @@ try {
         }
         if ($candidateAdapters.Count -eq 1) {
             $candidate = $candidateAdapters[0]
-            $pnp = Get-CimInstance Win32_NetworkAdapter -Filter "InterfaceIndex = $($candidate.ifIndex)"
-            if ($pnp.PNPDeviceID -notmatch "^USB\\VID_18D1&PID_4EE7") {
-                throw "Matching MAC is not the expected USB gadget."
-            }
+            Assert-GadgetUsbPort $candidate $targetPorts
             $adapter = $candidate
         }
         if ($null -eq $adapter) {
@@ -185,47 +194,117 @@ try {
 
     $originalDhcp = (Get-NetIPInterface -InterfaceIndex $adapter.ifIndex `
         -AddressFamily IPv4 -PolicyStore ActiveStore).Dhcp
+    $addressAttempted = $true
     New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $BindAddress `
         -PrefixLength 24 -AddressFamily IPv4 -PolicyStore ActiveStore | Out-Null
     $addedAddress = $true
+    Assert-GadgetRoute $adapter $DeviceAddress
     $firewallRule = New-NetFirewallRule -DisplayName $firewallRuleName `
         -Direction Inbound -Action Allow -Protocol TCP -LocalPort $Port `
         -LocalAddress $BindAddress -RemoteAddress $DeviceAddress `
         -InterfaceAlias $adapter.Name -Profile Any -PolicyStore PersistentStore
+
+    @{
+        interface_guid = $adapter.InterfaceGuid.ToString()
+        host_address = $BindAddress
+        original_dhcp = "$originalDhcp"
+        usb_port_verified = $true
+        firewall_rule = $firewallRuleName
+        nbd_started = $true
+        ready = (Get-Date).ToString("o")
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogDirectory "ready.json")
 
     Write-Host "Using USB adapter '$($adapter.Name)' at $BindAddress."
     Write-Host "fastboot boot returned. Observing for at least $ServeSeconds seconds."
     Write-Host "The tablet should connect to $BindAddress`:$Port after RNDIS enumerates."
     $deadline = (Get-Date).AddSeconds($ServeSeconds)
     while ($true) {
-        $connections = @(Get-NetTCPConnection -LocalPort $Port `
-            -RemoteAddress $DeviceAddress -State Established -ErrorAction SilentlyContinue)
-        if ((Get-Date) -ge $deadline -and $connections.Count -eq 0) {
-            break
-        }
         if ($serverProcess.HasExited) {
             throw "NBD server exited while the tablet was booting."
+        }
+        try {
+            # Enumerate before filtering: a CIM failure is not a disconnect.
+            $connections = @(Get-NetTCPConnection -ErrorAction Stop | Where-Object {
+                $_.LocalPort -eq $Port -and $_.RemoteAddress -eq $DeviceAddress -and
+                $_.State -eq "Established"
+            })
+            $online = @(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object {
+                $_.InterfaceGuid -eq $adapter.InterfaceGuid -and $_.Status -eq "Up"
+            })
+            if ((Get-Date) -ge $deadline -and $connections.Count -eq 0 -and $online.Count -eq 0) {
+                $disconnectVerified = $true
+                break
+            }
+        } catch {
+            Write-Warning "Cannot verify USB/NBD disconnect; keeping the rootfs server alive: $_"
         }
         Start-Sleep -Seconds 1
     }
 }
 finally {
+    if ($bootRequested -and -not $disconnectVerified -and
+        $null -ne $serverProcess -and -not $serverProcess.HasExited) {
+        @{
+            complete = $false
+            rootfs_server_preserved = $true
+            server_pid = $serverProcess.Id
+            error = "Boot was requested but disconnect is unverified; network and NBD retained."
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogDirectory "cleanup.json")
+        Stop-Transcript | Out-Null
+        throw "NBD may still back the tablet rootfs; preserved the server and networking. Inspect private logs."
+    }
+    $cleanup = @{
+        complete = $true
+        address_added = $addedAddress
+        address_attempted = $addressAttempted
+    }
     if ($null -ne $serverProcess -and -not $serverProcess.HasExited) {
         Stop-Process -Id $serverProcess.Id -Force
     }
-    if ($addedAddress -and $null -ne $adapter) {
-        Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 `
-            -ErrorAction SilentlyContinue |
-            Where-Object { $_.IPAddress -eq $BindAddress } |
-            Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-    }
-    if ($null -ne $originalDhcp -and $null -ne $adapter) {
-        Set-NetIPInterface -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 `
-            -Dhcp $originalDhcp -PolicyStore ActiveStore -ErrorAction Continue
+    if ($null -ne $adapter) {
+        $cleanup.interface_guid = $adapter.InterfaceGuid.ToString()
+        $cleanup.original_dhcp = "$originalDhcp"
+        try {
+            $current = @(Get-NetAdapter -IncludeHidden | Where-Object {
+                $_.InterfaceGuid -eq $adapter.InterfaceGuid
+            })
+            if ($current.Count -ne 1) {
+                throw "Recorded gadget cannot be enumerated; cleanup is unverified."
+            }
+            $index = $current[0].ifIndex
+            if ($addressAttempted) {
+                Get-NetIPAddress -AddressFamily IPv4 -PolicyStore ActiveStore -ErrorAction Stop |
+                    Where-Object { $_.InterfaceIndex -eq $index -and $_.IPAddress -eq $BindAddress } |
+                    Remove-NetIPAddress -Confirm:$false -ErrorAction Stop
+                if (Get-NetIPAddress -AddressFamily IPv4 -PolicyStore ActiveStore -ErrorAction Stop |
+                    Where-Object { $_.InterfaceIndex -eq $index -and $_.IPAddress -eq $BindAddress }) {
+                    throw "Temporary USB address remains."
+                }
+            }
+            if ($null -ne $originalDhcp) {
+                Set-NetIPInterface -InterfaceIndex $index -AddressFamily IPv4 `
+                    -Dhcp $originalDhcp -PolicyStore ActiveStore -ErrorAction Stop
+                if ((Get-NetIPInterface -InterfaceIndex $index -AddressFamily IPv4 `
+                    -PolicyStore ActiveStore).Dhcp -ne $originalDhcp) {
+                    throw "Original DHCP state has not been restored."
+                }
+            }
+        } catch {
+            $cleanup.complete = $false
+            $cleanup.error = "$_"
+        }
     }
     if ($null -ne $firewallRule) {
-        Remove-NetFirewallRule -InputObject $firewallRule `
-            -ErrorAction SilentlyContinue
+        try {
+            Remove-NetFirewallRule -InputObject $firewallRule -ErrorAction Stop
+        } catch {
+            $cleanup.complete = $false
+            $cleanup.firewall_error = "$_"
+        }
     }
+    $cleanup | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogDirectory "cleanup.json")
     Stop-Transcript | Out-Null
+    if (-not $cleanup.complete) {
+        throw "USB cleanup remains unverified for the recorded GUID; see cleanup.json."
+    }
 }

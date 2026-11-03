@@ -1,0 +1,19 @@
+Subject: [PATCH] Menu: declare the previous settings only for standard boot
+
+The no-standard-boot variant does not use Was. Keep -Werror enabled and
+guard its declaration with the same feature as its only consumer.
+Applies to OpenABL 59338daddd4be82712e2e72bf15cd2f480d517b4.
+
+diff --git a/Menu/Menu.c b/Menu/Menu.c
+--- a/Menu/Menu.c
++++ b/Menu/Menu.c
+@@ -1227,7 +1227,9 @@
+   }
+   case COMMAND_SAVE_SETTINGS: {
+     SETTINGS     Want    = mApp.Settings;
++#ifdef OABL_STANDARD_BOOT
+     SETTINGS     Was     = M->Stored;
++#endif
+     CONST CHAR8 *Failure = Save (M, &Want);
+     AppSetSettings (&mApp, &M->Stored);
+     AppSetCaps (&mApp, &M->Caps);

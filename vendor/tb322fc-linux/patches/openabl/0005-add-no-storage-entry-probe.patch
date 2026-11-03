@@ -1,0 +1,125 @@
+diff --git a/QcomModulePkg/Application/LinuxLoader/LinuxLoader.c b/QcomModulePkg/Application/LinuxLoader/LinuxLoader.c
+--- a/QcomModulePkg/Application/LinuxLoader/LinuxLoader.c
++++ b/QcomModulePkg/Application/LinuxLoader/LinuxLoader.c
+@@ -84,6 +84,9 @@
+ #include <Library/OpenAblMenu.h>
+ #include <Library/UpdateCmdLine.h>
+ #include <Protocol/EFICardInfo.h>
++#ifdef TB322FC_ABL_ENTRY_PROBE
++#include <Protocol/GraphicsOutput.h>
++#endif
+ 
+ #define MAX_APP_STR_LEN 64
+ #define MAX_NUM_FS 10
+@@ -251,6 +254,56 @@
+ 
+  **/
+ 
++#ifdef TB322FC_ABL_ENTRY_PROBE
++/* Stop before OpenABL settings and normal ABL partition/device-state handling. */
++STATIC VOID __attribute__ ((noreturn, no_sanitize ("safe-stack")))
++Tb322fcEntryProbe (VOID)
++{
++  EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop = NULL;
++  EFI_STATUS Status;
++  UINTN Width = 0;
++  UINTN Height = 0;
++  UINTN Band;
++  UINTN Phase = 0;
++  STATIC EFI_GRAPHICS_OUTPUT_BLT_PIXEL Colors[] = {
++    {0x00, 0x00, 0x00, 0x00},
++    {0x30, 0xe0, 0x20, 0x00},
++    {0xf0, 0x80, 0x10, 0x00},
++    {0xff, 0xff, 0xff, 0x00}
++  };
++
++  gBS->SetWatchdogTimer (0, 0, 0, NULL);
++  DEBUG ((EFI_D_ERROR, "TB322FC OPENABL ENTRY PROBE - NO STORAGE PATH\n"));
++  if (gST->ConOut != NULL) {
++    gST->ConOut->OutputString (
++      gST->ConOut, L"\r\nTB322FC OPENABL ENTRY PROBE - NO STORAGE PATH\r\n");
++  }
++  Status = gBS->LocateProtocol (&gEfiGraphicsOutputProtocolGuid, NULL,
++                                (VOID **)&Gop);
++  if (!EFI_ERROR (Status) && Gop != NULL && Gop->Blt != NULL &&
++      Gop->Mode != NULL && Gop->Mode->Info != NULL) {
++    Width = Gop->Mode->Info->HorizontalResolution;
++    Height = Gop->Mode->Info->VerticalResolution;
++    if (Width >= 4 && Width <= 16384 && Height >= 4 && Height <= 16384) {
++      for (Band = 0; Band < 4; Band++) {
++        Gop->Blt (Gop, &Colors[Band], EfiBltVideoFill, 0, 0,
++                  0, Band * (Height / 4), Width, Height / 4, 0);
++      }
++    } else {
++      Width = 0;
++    }
++  }
++  /* Failure to draw is inconclusive; never fall through to normal boot. */
++  for (;;) {
++    if (Width != 0) {
++      Gop->Blt (Gop, &Colors[(Phase++ & 1) ? 3 : 0], EfiBltVideoFill,
++                0, 0, Width / 4, 3 * (Height / 4), Width / 2, Height / 4, 0);
++    }
++    gBS->Stall (1000000);
++  }
++}
++#endif
++
+ EFI_STATUS EFIAPI  __attribute__ ( (no_sanitize ("safe-stack")))
+ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+ {
+@@ -267,6 +320,10 @@
+   /* set ROT, BootState and VBH only once per boot*/
+   BOOLEAN SetRotAndBootStateAndVBH = FALSE;
+   BOOLEAN FDRDetected = FALSE;
++
++#ifdef TB322FC_ABL_ENTRY_PROBE
++  Tb322fcEntryProbe ();
++#endif
+ 
+   DEBUG ((EFI_D_INFO, "Loader Build Info: %a %a\n", __DATE__, __TIME__));
+   DEBUG ((EFI_D_VERBOSE, "LinuxLoader Load Address to debug ABL: 0x%llx\n",
+diff --git a/QcomModulePkg/Application/LinuxLoader/LinuxLoader.inf b/QcomModulePkg/Application/LinuxLoader/LinuxLoader.inf
+--- a/QcomModulePkg/Application/LinuxLoader/LinuxLoader.inf
++++ b/QcomModulePkg/Application/LinuxLoader/LinuxLoader.inf
+@@ -138,6 +138,7 @@
+         gEfiNvme0Guid
+ 
+ [Protocols]
++	gEfiGraphicsOutputProtocolGuid
+ 	gEfiSimpleTextInputExProtocolGuid
+ 	gEfiBlockIoProtocolGuid
+ 	gEfiLoadedImageProtocolGuid
+diff --git a/QcomModulePkg/QcomModulePkg.dsc b/QcomModulePkg/QcomModulePkg.dsc
+--- a/QcomModulePkg/QcomModulePkg.dsc
++++ b/QcomModulePkg/QcomModulePkg.dsc
+@@ -114,6 +114,9 @@
+   GCC:*_*_*_CC_FLAGS = -DZ_SOLO
+   GCC:*_*_*_CC_FLAGS = -DPRODUCT_NAME=\"$(BOARD_BOOTLOADER_PRODUCT_NAME)\"
+   GCC:*_*_*_CC_FLAGS = -DPRODUCT_VERSION=\"$(BOARD_BOOTLOADER_PRODUCT_VERSION)\"
++!if $(TB322FC_ABL_ENTRY_PROBE) == 1
++  GCC:*_*_*_CC_FLAGS = -DTB322FC_ABL_ENTRY_PROBE
++!endif
+   GCC:*_*_*_CC_FLAGS = -DENABLE_BOOT_CMD
+   GCC:*_*_*_CC_FLAGS = -DDEBUG_COMPILED_LEVELS=$(DEBUG_PRINT_LEVELS) -DDEBUG_SHORT_ASSERT
+ 
+diff --git a/makefile b/makefile
+--- a/makefile
++++ b/makefile
+@@ -243,6 +243,8 @@
+ ABL_USB_HOST_BUNDLED_STACK ?= 0
+ # The menu program (QcomModulePkg/Prebuilt/OpenAblMenu/openabl-menu.efi).
+ OPENABL_MENU ?= 0
++# Diagnostic entry only; no menu or Android/storage path is entered.
++TB322FC_ABL_ENTRY_PROBE ?= 0
+ # sm6115: off-mode charging from the PMIC power-on reason.
+ TARGET_SOC_SM6115 ?= 0
+ 
+@@ -401,6 +403,7 @@
+ 	-D ABL_USB_HOST=$(ABL_USB_HOST) \
+ 	-D ABL_USB_HOST_BUNDLED_STACK=$(ABL_USB_HOST_BUNDLED_STACK) \
+ 	-D OPENABL_MENU=$(OPENABL_MENU) \
++	-D TB322FC_ABL_ENTRY_PROBE=$(TB322FC_ABL_ENTRY_PROBE) \
+ 	-D TARGET_SOC_SM6115=$(TARGET_SOC_SM6115) \
+ 	-D DDR_SUPPORTS_SCT_CONFIG=$(DDR_SUPPORTS_SCT_CONFIG) \
+ 	-j build_modulepkg.log $*

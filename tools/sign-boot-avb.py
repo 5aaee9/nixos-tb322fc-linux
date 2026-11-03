@@ -65,6 +65,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
+    if args.output.exists() or args.output.is_symlink():
+        parser.error("output must be a new host-side image")
     for path in (args.input, args.template, args.key, args.avbtool):
         if not path.is_file():
             parser.error(f"missing file: {path}")

@@ -23,7 +23,7 @@ let
   };
   bridge = pkgs.writeShellApplication {
     name = "y700-power-key-session";
-    runtimeInputs = [ pkgs.systemd pkgs.util-linux pkgs.glib pkgs.coreutils ];
+    runtimeInputs = [ pkgs.systemd pkgs.util-linux pkgs.glib pkgs.coreutils pkgs.getent ];
     text = builtins.replaceStrings
       [ "@UID@" "@USER@" ]
       [ (toString config.users.users.y700.uid) "y700" ]

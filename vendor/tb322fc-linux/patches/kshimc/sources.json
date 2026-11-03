@@ -1,0 +1,29 @@
+{
+  "runtime": {
+    "repository": "https://github.com/tc1911/kShimC4sheng",
+    "revision": "51aef95e6bb5fa569c4653e96f3f06ca02f9d784"
+  },
+  "dependencies": {
+    "crdk": {
+      "repository": "https://github.com/Project-Aloha/CrDK",
+      "revision": "b6c3335136b7f6b28271917de11e8f11982975fc",
+      "destination": "vendor/kshim/lib/CrDK"
+    },
+    "picolibc": {
+      "repository": "https://github.com/picolibc/picolibc",
+      "revision": "f7edb0869e64b9d687f46961adeef7154921fe92",
+      "destination": "vendor/kshim/lib/picolibc"
+    },
+    "lvgl": {
+      "repository": "https://github.com/lvgl/lvgl",
+      "revision": "7f07a129e8d77f4984fff8e623fd5be18ff42e74",
+      "destination": "vendor/kshim/third_party/lvgl"
+    }
+  },
+  "patches": [
+    {
+      "file": "0001-tb322fc-menu-diagnostic.patch",
+      "sha256": "799d64ed168b2ffd76be39a3a8f65d299c8ec1e65b1d76f006547621f62b1fc5"
+    }
+  ]
+}

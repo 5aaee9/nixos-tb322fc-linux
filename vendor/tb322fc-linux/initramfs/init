@@ -1,12 +1,23 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
-# Mount only the dedicated rootfs partition, then hand off to its init.
+# Mount only the dedicated rootfs partition, then hand off to its system profile.
 export PATH=/bin:/sbin
 BB=/bin/busybox
 
 fail() {
     echo "Rootfs handoff failed: $*" >&2
-    echo "No recovery writes or automatic reboot will be attempted." >&2
+    "$BB" timeout 5 "$BB" umount /newroot 2>/dev/null || true
+    if [ -f /etc/y700-efi-system ]; then
+        echo "EFI generation rejected; powering off in 15 seconds." >&2
+        echo "Hold Volume Down at the next power-on for the OpenABL menu." >&2
+        "$BB" sleep 15
+        "$BB" poweroff -f -n
+        while :; do "$BB" sleep 3600; done
+    fi
+    echo "Returning to the installed Android boot chain in 15 seconds." >&2
+    "$BB" sleep 15
+    "$BB" reboot -f -n
+    echo "Reboot failed; use the hardware power key to recover." >&2
     while :; do "$BB" sleep 3600; done
 }
 
@@ -15,13 +26,34 @@ fail() {
 "$BB" mount -t devtmpfs devtmpfs /dev || fail "mount devtmpfs"
 
 selector=PARTLABEL=rootfs
+usb_debug=0
+selected_system=
+selected_generation=
+selection_count=0
+generation_count=0
 for option in $("$BB" cat /proc/cmdline); do
-    case "$option" in root=*) selector=${option#root=} ;; esac
+    case "$option" in
+        root=*) selector=${option#root=} ;;
+        y700.usb-debug=1) usb_debug=1 ;;
+        y700.system=*) selected_system=${option#y700.system=}; selection_count=$((selection_count + 1)) ;;
+        y700.generation=*) selected_generation=${option#y700.generation=}; generation_count=$((generation_count + 1)) ;;
+    esac
 done
 case "$selector" in
-    PARTLABEL=rootfs|PARTUUID=*) ;;
-    *) fail "use root=PARTLABEL=rootfs or root=PARTUUID=<rootfs UUID>" ;;
+    PARTLABEL=rootfs) ;;
+    *) fail "this candidate requires root=PARTLABEL=rootfs" ;;
 esac
+if [ -f /etc/y700-efi-system ]; then
+    [ "$selection_count" = 1 ] && [ "$generation_count" = 1 ] ||
+        fail "EFI entry must select exactly one system and generation"
+    [ "$selected_system" = "$("$BB" cat /etc/y700-efi-system)" ] &&
+        [ "$selected_generation" = "$("$BB" cat /etc/y700-efi-generation)" ] ||
+        fail "EFI entry does not match its initrd"
+    [ "$("$BB" cat /sys/firmware/efi/fw_platform_size)" = 64 ] || fail "not a 64-bit EFI boot"
+else
+    [ "$selection_count" = 0 ] && [ "$generation_count" = 0 ] ||
+        fail "EFI selection requires its matching initrd"
+fi
 
 root_device=
 for attempt in $("$BB" seq 1 60); do
@@ -34,12 +66,10 @@ for attempt in $("$BB" seq 1 60); do
         continue
     fi
     matches=0
+    root_device=
     for node in /sys/class/block/sd*; do
         [ -f "$node/partition" ] || continue
         "$BB" grep -qx 'PARTNAME=rootfs' "$node/uevent" || continue
-        if [ "$selector" != PARTLABEL=rootfs ]; then
-            "$BB" grep -qxF "$selector" "$node/uevent" || continue
-        fi
         root_device=/dev/${node##*/}
         root_node=$node
         matches=$((matches + 1))
@@ -60,13 +90,44 @@ for node in /sys/class/block/sd*; do
     [ "$device" = "$root_device" ] && continue
     [ "$device" = "/dev/$root_parent" ] && continue
     "$BB" blockdev --setro "$device" || fail "protect $device"
+    [ "$("$BB" blockdev --getro "$device")" = 1 ] || fail "verify protection $device"
 done
-[ "$("$BB" blockdev --getro "$root_device")" = 0 ] || fail "rootfs is read-only"
+validate_root() {
+    [ "$("$BB" cat /newroot/etc/y700-rootfs-contract)" = tb322fc-rootfs-v1 ] ||
+        fail "missing install contract"
+    if [ -f /etc/y700-efi-system ]; then
+        # A selected EFI entry must not silently follow a newer default profile.
+        system=$selected_system
+    else
+        # Resolve absolute store links inside /newroot, not against the initramfs.
+        profile=$("$BB" readlink /newroot/nix/var/nix/profiles/system) || fail "system profile"
+        echo "$profile" | "$BB" grep -Eq '^system-[1-9][0-9]*-link$' || fail "profile name"
+        system=$("$BB" readlink "/newroot/nix/var/nix/profiles/$profile") || fail "generation link"
+    fi
+    echo "$system" | "$BB" grep -Eq '^/nix/store/[0-9a-df-np-sv-z]{32}-nixos-system-[a-zA-Z0-9.+_-]+$' ||
+        fail "generation target"
+    [ ! -L "/newroot$system" ] && [ ! -L "/newroot$system/init" ] &&
+        [ -x "/newroot$system/init" ] || fail "rootfs lacks executable NixOS init"
+}
 
 "$BB" mkdir -p /newroot /run
+# ro alone can replay an ext4 journal. Block writes and suppress recovery
+# until the install contract, profile and actual init have been checked.
+"$BB" blockdev --setro "$root_device" || fail "protect root before validation"
+[ "$("$BB" blockdev --getro "$root_device")" = 1 ] || fail "verify read-only root"
+"$BB" mount -t ext4 -o ro,noload "$root_device" /newroot || fail "inspect rootfs"
+validate_root
+"$BB" umount /newroot || fail "unmount inspected root"
+"$BB" blockdev --setrw "$root_device" || fail "enable approved root"
+[ "$("$BB" blockdev --getro "$root_device")" = 0 ] || fail "verify writable root"
 "$BB" mount -t ext4 -o rw,noatime,errors=remount-ro "$root_device" /newroot || fail "mount rootfs"
-[ -x /newroot/sbin/init ] || fail "rootfs lacks /sbin/init"
+# Recovery may update metadata. Select the effective profile after replay.
+validate_root
 "$BB" mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run || fail "mount run"
+
+if [ "$usb_debug" = 1 ]; then
+    . /etc/usb-rndis
+fi
 
 # Keep early firmware available across switch_root without modifying /usr.
 # Built-in drivers may request more files after the initial probe completes.
@@ -78,5 +139,6 @@ echo /run/firmware > /sys/module/firmware_class/parameters/path || fail "set fir
 for filesystem in dev proc sys run; do
     "$BB" mount --move "/$filesystem" "/newroot/$filesystem" || fail "move $filesystem"
 done
-exec "$BB" switch_root /newroot /sbin/init
+echo "Y700_LOCAL_ROOT_HANDOFF=$system"
+exec "$BB" switch_root /newroot "$system/init"
 fail "switch_root returned"

@@ -1,5 +1,158 @@
 {
   "nodes": {
+    "audioreach-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1788278954,
+        "narHash": "sha256-3+yp/crVjAZilFZ/tvE6Ab8AJZOxjE0b8XGtH5hOKsQ=",
+        "owner": "linux-msm",
+        "repo": "audioreach-topology",
+        "rev": "e7b20b2b16cdda18eb8ae143c8d95c4815c0288e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "linux-msm",
+        "repo": "audioreach-topology",
+        "rev": "e7b20b2b16cdda18eb8ae143c8d95c4815c0288e",
+        "type": "github"
+      }
+    },
+    "crdk-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790141303,
+        "narHash": "sha256-gDSNDo1IMzsRbaGc/HHwyLJv3WYvLwSXa5OSlIvJ2oc=",
+        "owner": "Project-Aloha",
+        "repo": "CrDK",
+        "rev": "b6c3335136b7f6b28271917de11e8f11982975fc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Project-Aloha",
+        "repo": "CrDK",
+        "rev": "b6c3335136b7f6b28271917de11e8f11982975fc",
+        "type": "github"
+      }
+    },
+    "device-config": {
+      "flake": false,
+      "locked": {
+        "path": "./nix/device-config",
+        "type": "path"
+      },
+      "original": {
+        "path": "./nix/device-config",
+        "type": "path"
+      },
+      "parent": []
+    },
+    "edk2-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1758605928,
+        "narHash": "sha256-sYRItqbB/bMbi6F1mzs9jEPjEKXOYDXLr7We1fjzPs8=",
+        "ref": "refs/heads/caf_migration/github/master",
+        "rev": "aef4e86045bd151a54d33bab8ae5e8e62462a8f4",
+        "shallow": true,
+        "type": "git",
+        "url": "https://git.codelinaro.org/clo/la/abl/tianocore/edk2.git"
+      },
+      "original": {
+        "rev": "aef4e86045bd151a54d33bab8ae5e8e62462a8f4",
+        "shallow": true,
+        "type": "git",
+        "url": "https://git.codelinaro.org/clo/la/abl/tianocore/edk2.git"
+      }
+    },
+    "flake-parts": {
+      "inputs": {
+        "nixpkgs-lib": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1778716662,
+        "narHash": "sha256-m1Yf0wZ8j1OHjTc2UwHwyQRSnNeSgLJOd7q5Y45hzi4=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f7c1a2d347e4c52d5fb8d10cb4d94b5884e546fb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f7c1a2d347e4c52d5fb8d10cb4d94b5884e546fb",
+        "type": "github"
+      }
+    },
+    "kernel-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786915946,
+        "narHash": "sha256-GAjLGXXJiU42En31XWWx31IRT63G2pNsDN4ifNGtHis=",
+        "owner": "torvalds",
+        "repo": "linux",
+        "rev": "8d3ae59288f1e7d58d76558a6ee96d533bc5019f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "torvalds",
+        "repo": "linux",
+        "rev": "8d3ae59288f1e7d58d76558a6ee96d533bc5019f",
+        "type": "github"
+      }
+    },
+    "kshim-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793213118,
+        "narHash": "sha256-EVK2Nk1tFGp47zOt5qmPmrb+7zWKeSGhbVI8vUS1qWY=",
+        "owner": "tc1911",
+        "repo": "kShimC4sheng",
+        "rev": "51aef95e6bb5fa569c4653e96f3f06ca02f9d784",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tc1911",
+        "repo": "kShimC4sheng",
+        "rev": "51aef95e6bb5fa569c4653e96f3f06ca02f9d784",
+        "type": "github"
+      }
+    },
+    "lvgl-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1730272476,
+        "narHash": "sha256-a/UWO12xuNNJSVYHUxkav/raVNotCBX3cTjvBTEH87U=",
+        "owner": "lvgl",
+        "repo": "lvgl",
+        "rev": "7f07a129e8d77f4984fff8e623fd5be18ff42e74",
+        "type": "github"
+      },
+      "original": {
+        "owner": "lvgl",
+        "repo": "lvgl",
+        "rev": "7f07a129e8d77f4984fff8e623fd5be18ff42e74",
+        "type": "github"
+      }
+    },
+    "microui-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1723575661,
+        "narHash": "sha256-oilNz95OZJ5mv6NA17fnwnFmXq6L7j1w5Nkg/34gf64=",
+        "owner": "rxi",
+        "repo": "microui",
+        "rev": "0850aba860959c3e75fb3e97120ca92957f9d057",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rxi",
+        "repo": "microui",
+        "rev": "0850aba860959c3e75fb3e97120ca92957f9d057",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1792615934,
@@ -16,9 +169,91 @@
         "type": "github"
       }
     },
+    "openabl-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793574768,
+        "narHash": "sha256-REDhdE52FU4+4+PE9Etk6nUVl9pUGQ/cLOWdY0hC1X0=",
+        "owner": "OpenHandheldCollective",
+        "repo": "OpenABL",
+        "rev": "59338daddd4be82712e2e72bf15cd2f480d517b4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "OpenHandheldCollective",
+        "repo": "OpenABL",
+        "rev": "59338daddd4be82712e2e72bf15cd2f480d517b4",
+        "type": "github"
+      }
+    },
+    "picolibc-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1769456870,
+        "narHash": "sha256-9xFkUZJJ2ikyi4/m5B+oDa5Zznm/1aPa8El2JLEZBE8=",
+        "owner": "picolibc",
+        "repo": "picolibc",
+        "rev": "f7edb0869e64b9d687f46961adeef7154921fe92",
+        "type": "github"
+      },
+      "original": {
+        "owner": "picolibc",
+        "repo": "picolibc",
+        "rev": "f7edb0869e64b9d687f46961adeef7154921fe92",
+        "type": "github"
+      }
+    },
+    "qtestsign-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1755082817,
+        "narHash": "sha256-XLpAbHM2DFn2t3W+siHSXkSf0dr25FTsZ5tWKtElF9g=",
+        "owner": "msm8916-mainline",
+        "repo": "qtestsign",
+        "rev": "f3df53a5f0e37ccee076541f30f9d5b8340fc2d3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "msm8916-mainline",
+        "repo": "qtestsign",
+        "rev": "f3df53a5f0e37ccee076541f30f9d5b8340fc2d3",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "audioreach-src": "audioreach-src",
+        "crdk-src": "crdk-src",
+        "device-config": "device-config",
+        "edk2-src": "edk2-src",
+        "flake-parts": "flake-parts",
+        "kernel-src": "kernel-src",
+        "kshim-src": "kshim-src",
+        "lvgl-src": "lvgl-src",
+        "microui-src": "microui-src",
+        "nixpkgs": "nixpkgs",
+        "openabl-src": "openabl-src",
+        "picolibc-src": "picolibc-src",
+        "qtestsign-src": "qtestsign-src",
+        "wireless-regdb-src": "wireless-regdb-src"
+      }
+    },
+    "wireless-regdb-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780155377,
+        "narHash": "sha256-LIVT7Cr6aMvs4SHyTpCxb2BoNOfdjMUDdbihpRhs9FU=",
+        "ref": "refs/heads/master",
+        "rev": "b488e68eb1ca0a0dcdf742c7f4195c7678eafdc5",
+        "shallow": true,
+        "type": "git",
+        "url": "https://git.kernel.org/pub/scm/linux/kernel/git/wens/wireless-regdb.git"
+      },
+      "original": {
+        "rev": "b488e68eb1ca0a0dcdf742c7f4195c7678eafdc5",
+        "shallow": true,
+        "type": "git",
+        "url": "https://git.kernel.org/pub/scm/linux/kernel/git/wens/wireless-regdb.git"
       }
     }
   },

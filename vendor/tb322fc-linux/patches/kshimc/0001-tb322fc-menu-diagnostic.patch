@@ -1,0 +1,313 @@
+Subject: [PATCH] Add an opt-in bounded TB322FC menu diagnostic
+
+Keep ordinary behavior when the diagnostic limit is zero. Exercise real
+menu loops with simulated time/input. Fix disabled charger compilation
+and avoid macro expansion of LVGL configuration paths.
+
+--- a/vendor/kshim/CMakeLists.txt
++++ b/vendor/kshim/CMakeLists.txt
+@@ -220,8 +220,12 @@
+ set(LV_CONF_BUILD_DISABLE_THORVG_INTERNAL ON CACHE BOOL "" FORCE)
+ set(LV_CONF_BUILD_DISABLE_EXAMPLES ON CACHE BOOL "" FORCE)
+ set(LV_CONF_BUILD_DISABLE_DEMOS ON CACHE BOOL "" FORCE)
+-set(LV_CONF_PATH "${CMAKE_SOURCE_DIR}/src/include/lv_conf.h" CACHE FILEPATH "" FORCE)
++# LVGL stringifies this macro; an unquoted path component such as "linux"
++# can expand to a compiler predefined macro. Use the include directory.
++set(LV_CONF_PATH "" CACHE FILEPATH "" FORCE)
++set(LV_CONF_INCLUDE_SIMPLE ON CACHE BOOL "" FORCE)
+ add_subdirectory(third_party/lvgl EXCLUDE_FROM_ALL)
++target_include_directories(lvgl SYSTEM PUBLIC "${CMAKE_SOURCE_DIR}/src/include")
+ include(${CMAKE_SOURCE_DIR}/ports/lvgl/CMakeLists.txt)
+ kshim_enable_lvgl_smp_adapter(lvgl "${CMAKE_SOURCE_DIR}/third_party/lvgl")
+ target_link_libraries(lvgl PRIVATE c)
+--- a/vendor/kshim/ports/crdk/prepare.py
++++ b/vendor/kshim/ports/crdk/prepare.py
+@@ -16,8 +16,15 @@
+     port = Path(__file__).resolve().parent
+     manifest = json.loads((port / "UPSTREAM.json").read_text())
+     revision = manifest["revision"]
+-    actual = subprocess.check_output(
+-        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
++    source_archive = os.environ.get("KSHIM_CRDK_SOURCE_ARCHIVE")
++    if source_archive:
++        archive = Path(source_archive).read_bytes()
++        if hashlib.sha256(archive).hexdigest() != os.environ.get("KSHIM_CRDK_ARCHIVE_SHA256"):
++            raise ValueError("CrDK source archive hash mismatch")
++        actual = os.environ.get("KSHIM_CRDK_REVISION")
++    else:
++        actual = subprocess.check_output(
++            ["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+     if actual != revision:
+         raise ValueError(f"CrDK must be at {revision}, found {actual}")
+     patches = []
+@@ -27,7 +34,8 @@
+             raise ValueError(f"CrDK patch hash mismatch: {patch.name}")
+         patches.append(patch)
+     signature = hashlib.sha256((port / "UPSTREAM.json").read_bytes() +
+-                               Path(__file__).read_bytes()).hexdigest()
++                               Path(__file__).read_bytes() +
++                               (archive if source_archive else b"")).hexdigest()
+     stamp = output / ".kshim-crdk-stamp"
+     if stamp.exists() and stamp.read_text() == signature:
+         return
+@@ -35,8 +43,9 @@
+     with tempfile.TemporaryDirectory(prefix="crdk-", dir=output.parent) as temporary:
+         tree = Path(temporary) / "tree"
+         tree.mkdir()
+-        archive = subprocess.check_output(
+-            ["git", "-C", str(source), "archive", "--format=tar", revision])
++        if not source_archive:
++            archive = subprocess.check_output(
++                ["git", "-C", str(source), "archive", "--format=tar", revision])
+         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+             tar.extractall(tree, filter="data")
+         for patch in patches:
+--- a/vendor/kshim/src/Kconfig
++++ b/vendor/kshim/src/Kconfig
+@@ -13,6 +13,15 @@
+       splash/UI status string under /chosen/kshim,diag and hand that copy
+       to the stock kernel.  Android then exposes it through
+       /proc/device-tree/chosen/kshim,diag.
++
++config KSHIM_DIAGNOSTIC_MENU_LIMIT_MS
++    int "Diagnostic menu deadline independent of key interaction"
++    range 0 120000
++    default 0
++    help
++      Return the validated default payload when this many milliseconds have
++      passed, even after navigation cancels the ordinary countdown. Zero
++      disables this diagnostic limit. This is not a hardware watchdog.
+ 
+ config KSHIM_DIAG_PAINT
+     bool "Paint the detected scanout buffer to verify splash handoff"
+--- a/vendor/kshim/src/core/platform.c
++++ b/vendor/kshim/src/core/platform.c
+@@ -168,7 +168,9 @@
+ /* Diagnostic: -1 = never attempted, -3 = start_menu failed,
+  * -2 = entry transfer failed, 0 = GUI loop entered. */
+ static int GuiStatus = -1;
++#if CONFIG_KSHIM_MENU_ADVANCED_ACTIONS
+ static char FailureDetail[64];
++#endif
+ #if defined(CONFIG_KSHIM_CHARGER_MODE) && CONFIG_KSHIM_CHARGER_MODE
+ static int ChargerUiRequested;
+ void kshim_platform_request_charger_ui(void) { ChargerUiRequested = 1; }
+@@ -800,6 +802,7 @@
+      * rebuilt once per fill and shared by the info page description. */
+     char info_summary[2048];
+     uint32_t timeout;
++    uint64_t diagnostic_start;
+     int advanced, language, psci_ready;
+     /* ---- Session settings (new entry point only) ---- */
+     int settings;
+@@ -1505,8 +1508,8 @@
+ 
+     /* Device is fixed for this build; the page is retained for the Back
+      * action machinery but is no longer reachable from Settings. */
+-    if (menu_append(&menu->pages[MENU_PAGE_DEVICE], "Xiaomi Pad 6S Pro",
+-                    "sheng (SM8550)", MENU_UNAVAILABLE, 0,
++    if (menu_append(&menu->pages[MENU_PAGE_DEVICE], settings_board_name(menu->effective),
++                    settings_board_code(menu->effective), MENU_UNAVAILABLE, 0,
+                     KSHIM_MENU_ROLE_DEVICE) ||
+         menu_append(&menu->pages[MENU_PAGE_DEVICE], KSHIM_MENU_ACTION_BACK,
+                     KSHIM_MENU_DESC_BACK_PARENT,
+@@ -1930,6 +1933,17 @@
+     if (menu->timeout) printf("\n%s\n", KSHIM_STR_AUTO_CANCELLED);
+     menu->timeout = 0;
+ }
++static int diagnostic_menu_expired(const struct menu_selection *menu)
++{
++#if CONFIG_KSHIM_DIAGNOSTIC_MENU_LIMIT_MS > 0
++    return menu->default_ok &&
++        get_current_time() - menu->diagnostic_start >=
++            (uint64_t)CONFIG_KSHIM_DIAGNOSTIC_MENU_LIMIT_MS;
++#else
++    (void)menu;
++    return 0;
++#endif
++}
+ static int serial_select(struct menu_selection *menu, size_t *selected)
+ {
+     int keys_ready = build_keys(menu->fdt) == 0;
+@@ -1938,6 +1952,10 @@
+     serial_show_page(page);
+     uint64_t start = get_current_time();
+     for (;;) {
++        if (diagnostic_menu_expired(menu)) {
++            *selected = menu->original_initial;
++            return 0;
++        }
+         int confirm = 0;
+         size_t confirmed_index = current;
+         char c;
+@@ -2065,6 +2083,7 @@
+     if (!selected) return -1;
+     struct menu_selection menu = {.fdt = (const void *)(uintptr_t)fdt,
+                                   .timeout = timeout_ms,
++                                  .diagnostic_start = get_current_time(),
+                                   .boot_delay_ms = timeout_ms, .info = info};
+ #if defined(CONFIG_KSHIM_CHARGER_MODE) && CONFIG_KSHIM_CHARGER_MODE && \
+     CONFIG_QCOM_KEYS
+@@ -2087,7 +2106,11 @@
+ #if CONFIG_KSHIM_FRAMEBUFFER && CONFIG_KSHIM_LVGL
+     struct menu_page *page = &menu.pages[menu.page];
+     GuiStatus = -1;
+-    int status = start_menu(menu.fdt, ChargerUiRequested != 0);
++    int charger_requested = 0;
++#if defined(CONFIG_KSHIM_CHARGER_MODE) && CONFIG_KSHIM_CHARGER_MODE
++    charger_requested = ChargerUiRequested != 0;
++#endif
++    int status = start_menu(menu.fdt, charger_requested);
+     if (status) GuiStatus = -3;
+     else GuiStatus = -2;
+ #if defined(CONFIG_KSHIM_CHARGER_MODE) && CONFIG_KSHIM_CHARGER_MODE && \
+@@ -2116,6 +2139,10 @@
+         kshim_lvgl_set_countdown(&Lvgl, menu.timeout);
+         uint64_t start = get_current_time();
+         for (;;) {
++            if (diagnostic_menu_expired(&menu)) {
++                *selected = menu.original_initial;
++                break;
++            }
+             menu_frame();
+             if (menu.timeout && kshim_lvgl_has_interacted(&Lvgl)) {
+                 menu.timeout = 0;
+--- a/vendor/kshim/src/core/main.c
++++ b/vendor/kshim/src/core/main.c
+@@ -1301,7 +1301,7 @@
+             struct kshim_resources *rr = kshim_resources_get();
+             char diag[192];
+             int dn = snprintf(diag, sizeof(diag),
+-                              "splash=%d;gui=%d;fb=%ux%u;stride=%u;sel=%u",
++                              "tb322fc-diag-v1;splash=%d;gui=%d;fb=%ux%u;stride=%u;sel=%u",
+                               rr ? rr->splash_status : -99,
+                               kshim_platform_gui_status(),
+                               rr ? (unsigned)rr->framebuffer.width : 0U,
+--- a/vendor/kshim/tests/CMakeLists.txt
++++ b/vendor/kshim/tests/CMakeLists.txt
+@@ -28,11 +28,13 @@
+     add_compile_definitions(CONFIG_KSHIM_MENU_STYLE_LVGL_DEFAULT=1)
+ endif()
+ 
+-set(LV_CONF_PATH "${KSHIM_ROOT}/src/include/lv_conf.h" CACHE FILEPATH "" FORCE)
++set(LV_CONF_PATH "" CACHE FILEPATH "" FORCE)
++set(LV_CONF_INCLUDE_SIMPLE ON CACHE BOOL "" FORCE)
+ set(LV_CONF_BUILD_DISABLE_THORVG_INTERNAL ON CACHE BOOL "" FORCE)
+ set(LV_CONF_BUILD_DISABLE_EXAMPLES ON CACHE BOOL "" FORCE)
+ set(LV_CONF_BUILD_DISABLE_DEMOS ON CACHE BOOL "" FORCE)
+ add_subdirectory("${KSHIM_ROOT}/third_party/lvgl" lvgl)
++target_include_directories(lvgl SYSTEM PUBLIC "${KSHIM_ROOT}/src/include")
+ add_subdirectory("${KSHIM_ROOT}/ports/crdk" crdk)
+ if(KSHIM_TEST_MENU_STYLE STREQUAL "STAR_CHART")
+     set(KSHIM_UI_FONT_BLOB "${KSHIM_ROOT}/src/ui/fonts/lxgw_wenkai_menu.ksf")
+@@ -320,6 +322,21 @@
+     "${KSHIM_ROOT}/src/core/menu_locale.c" "${KSHIM_ROOT}/src/core/boot_settings.c")
+ 
+ # TB323FU uses its own theme and locale without changing the generic suite.
++kshim_test(tb322fc_diagnostic_test tb322fc_diagnostic_test.c)
++target_compile_definitions(tb322fc_diagnostic_test PRIVATE
++    CONFIG_KSHIM_DIAGNOSTIC_MENU_LIMIT_MS=20000
++    CONFIG_KSHIM_MENU_SESSION_SETTINGS=1 CONFIG_KSHIM_MENU_SINGLE_LINUX=1
++    CONFIG_KSHIM_MENU_LANGUAGE_SWITCH=1 CONFIG_KSHIM_MENU_CHINESE=1
++    CONFIG_KSHIM_MENU_ADVANCED_ACTIONS=0 CONFIG_KSHIM_DEBUG_CONSOLE=0
++    CONFIG_KSHIM_MENU_POWER_ACTIONS=0 CONFIG_KSHIM_QCOM_REBOOT=0
++    CONFIG_KSHIM_BOOT_LAST=0 CONFIG_KSHIM_CHARGER_MODE=0)
++target_include_directories(tb322fc_diagnostic_test BEFORE PRIVATE
++    "${CMAKE_CURRENT_SOURCE_DIR}/include" "${KSHIM_ROOT}/lib/libfdt/include")
++target_link_libraries(tb322fc_diagnostic_test PRIVATE crdk)
++target_sources(tb322fc_diagnostic_test PRIVATE
++    "${KSHIM_ROOT}/src/core/menu_locale.c" "${KSHIM_ROOT}/src/core/boot_settings.c"
++    "${KSHIM_ROOT}/src/drivers/qcom_nv.c")
++
+ find_package(Python3 REQUIRED COMPONENTS Interpreter)
+ set(TB323FU_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/tb323fu-generated")
+ set(ENGLISH_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/english-generated")
+--- a/vendor/kshim/tests/platform_menu_test.c
++++ b/vendor/kshim/tests/platform_menu_test.c
+@@ -37,7 +37,10 @@
+ 
+ #include "../src/core/platform.c"
+ 
+-enum { MAX_EVENTS = 32, MAX_STEPS = 12000, MAX_PAGES = 16 };
++#ifndef KSHIM_TEST_MAX_STEPS
++#define KSHIM_TEST_MAX_STEPS 12000
++#endif
++enum { MAX_EVENTS = 32, MAX_STEPS = KSHIM_TEST_MAX_STEPS, MAX_PAGES = 16 };
+ typedef struct { uint64_t at; int index; int interacted; } ui_event_t;
+ typedef struct { uint64_t at; char value; } serial_event_t;
+ typedef struct { uint64_t at; int result; QcomKeyEvent event; } key_event_t;
+@@ -649,6 +652,9 @@
+ void kshim_lvgl_frame(kshim_lvgl_t *context, uint32_t elapsed)
+ {
+     (void)context; (void)elapsed; budget(); ++h.frames;
++#ifdef KSHIM_TEST_FRAME_TICK_MS
++    h.now += KSHIM_TEST_FRAME_TICK_MS;
++#endif
+     assert(h.ui_alive);
+     if (h.ui_next < h.ui_count && h.ui[h.ui_next].at <= h.now) {
+         ui_event_t e = h.ui[h.ui_next++];
+--- /dev/null
++++ b/vendor/kshim/tests/tb322fc_diagnostic_test.c
+@@ -0,0 +1,62 @@
++/* Run the actual menu loops with scripted input and time, without hardware. */
++#define main unused_upstream_test_main
++#define KSHIM_TEST_MAX_STEPS 100000
++/* Model the hardware timer during the final busy-loop boot hint, too. */
++#define KSHIM_TEST_FRAME_TICK_MS 1
++#include "platform_menu_test.c"
++#undef main
++
++static void assert_bounded_default(void)
++{
++    assert(h.now >= CONFIG_KSHIM_DIAGNOSTIC_MENU_LIMIT_MS);
++    assert(h.now < CONFIG_KSHIM_DIAGNOSTIC_MENU_LIMIT_MS + 1000U);
++    assert(h.reset_calls == 0 && h.off_calls == 0 && h.reboot_calls == 0);
++}
++
++static size_t choose_diagnostic(void)
++{
++    size_t selected = SIZE_MAX;
++    assert(kshim_platform_select(boot_fdt(), h.names, 1, 0, 1000, &selected) == 0);
++    return selected;
++}
++
++int main(void)
++{
++    /* Interaction cancels the visible countdown, not the diagnostic deadline. */
++    setup(false, 1);
++    h.info_mode = true;
++    ui_at(5, -1, 1);
++    assert(choose_diagnostic() == 0);
++    assert(h.countdown_zero > 0);
++    assert_bounded_default();
++
++    /* A partially typed serial selection cannot keep the runtime resident. */
++    setup(true, 1);
++    char_at(5, '1');
++    assert(choose_diagnostic() == 0);
++    assert(h.char_next == 1);
++    assert_bounded_default();
++
++    /* The actual TB322FC settings page also retains the original deadline. */
++    static const kshim_menu_role_t roles[] = {KSHIM_MENU_ROLE_ANDROID};
++    static const enum device_board boards[] = {DEVICE_BOARD_TB322FC};
++    struct device_info info = fixture_info();
++    info.board = DEVICE_BOARD_TB322FC;
++    size_t selected = SIZE_MAX;
++    setup(false, 1);
++    h.info_mode = true;
++    ui_at(5, 1, 1); /* Android, Settings, read-only device info. */
++    int rc = kshim_platform_select_localized_settings(boot_fdt(), h.names,
++        NULL, roles, &info, boards, 1, 0, 1000, 0, &selected);
++    assert(selected == 0);
++    assert(rc == 0 && h.info_snap_count >= 2);
++    assert_bounded_default();
++
++    /* An unresolved default must never become an automatic payload. */
++    struct menu_selection menu = {.default_ok = 0, .diagnostic_start = 0};
++    h.now = CONFIG_KSHIM_DIAGNOSTIC_MENU_LIMIT_MS + 1U;
++    assert(!diagnostic_menu_expired(&menu));
++
++    puts("PASS: GUI cancellation, serial input, settings page and unsafe default");
++    return 0;
++}

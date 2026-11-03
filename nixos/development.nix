@@ -1,40 +1,54 @@
-{ lib, ... }:
+{ config, lib, ... }:
 
 let
-  keyFile = builtins.getEnv "Y700_DEBUG_PUBLIC_KEY_FILE";
-  publicKey =
-    if keyFile == "" then ""
-    else lib.strings.trim (builtins.readFile keyFile);
+  publicKey = lib.strings.trim config.y700.debugPublicKey;
 in
 {
-  imports = [ ./usb-nbd.nix ./power-key.nix ];
-
-  assertions = [
-    {
-      assertion = lib.hasPrefix "ssh-ed25519 " publicKey;
-      message = "elden-desktop requires Y700_DEBUG_PUBLIC_KEY_FILE with the trusted host's public key.";
-    }
+  imports = [
+    ./usb-nbd.nix
+    ./power-key.nix
   ];
 
-  # This account exists only in the disposable development rootfs.
-  users.users.y700 = {
-    isNormalUser = true;
-    uid = 1000;
-    description = "Y700 development";
-    extraGroups = [ "wheel" "networkmanager" ];
-    initialHashedPassword = "";
-  };
-  services.displayManager.autoLogin = {
-    enable = true;
-    user = "y700";
+  options.y700.debugPublicKey = lib.mkOption {
+    type = lib.types.str;
+    default = "";
+    description = "Trusted host ed25519 public key; empty disables root USB SSH.";
   };
 
-  # Root diagnostics accept only this host over the existing USB link.
-  services.openssh.listenAddresses = [
-    { addr = "192.168.42.2"; port = 22; }
-  ];
-  services.openssh.settings.KbdInteractiveAuthentication = false;
-  users.users.root.openssh.authorizedKeys.keys = [
-    ''from="192.168.42.1",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ${publicKey}''
-  ];
+  config = {
+    assertions = [
+      {
+        assertion = publicKey == "" || lib.hasPrefix "ssh-ed25519 " publicKey;
+        message = "y700.debugPublicKey must be empty or an ed25519 public key.";
+      }
+    ];
+
+    # This account exists only in the disposable development rootfs.
+    users.users.y700 = {
+      isNormalUser = true;
+      uid = 1000;
+      description = "Y700 development";
+      extraGroups = [
+        "wheel"
+        "networkmanager"
+      ];
+      initialHashedPassword = "";
+    };
+    services.displayManager.autoLogin = {
+      enable = true;
+      user = "y700";
+    };
+
+    # Root diagnostics accept only this host over the existing USB link.
+    services.openssh.listenAddresses = [
+      {
+        addr = "192.168.42.2";
+        port = 22;
+      }
+    ];
+    services.openssh.settings.KbdInteractiveAuthentication = false;
+    users.users.root.openssh.authorizedKeys.keys = lib.optionals (publicKey != "") [
+      ''from="192.168.42.1",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ${publicKey}''
+    ];
+  };
 }

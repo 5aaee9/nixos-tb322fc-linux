@@ -1,13 +1,13 @@
 # Temporary USB/NBD rootfs delivery
 
-`boot-usb-nbd.img` is a development-only image for the TB322FC/elden. It
+The `boot-usb-nbd` Nix package is a development-only image for TB322FC/elden. It
 keeps Android in place and expects the host to provide the NixOS image over a
 USB RNDIS network link:
 
 1. The initramfs creates a single RNDIS gadget and assigns the tablet
    `192.168.42.2/24`.
 2. The Windows host assigns `192.168.42.1/24` to the new RNDIS adapter.
-3. The host serves `artifacts/nixos-rootfs.ext4` on TCP port `10809` using the
+3. The host serves the selected `nixos-rootfs.ext4` on TCP port `10809` using the
    small Python NBD server in `tools/serve-rootfs-nbd.py`.
 4. The tablet connects with BusyBox `nbd-client`, mounts the image read-only,
    and places a 2 GiB tmpfs overlay above it.
@@ -22,13 +22,16 @@ modify Android or the host image.
 From the project root:
 
 ```sh
-vendor/tb322fc-linux/scripts/build-boot-usb-nbd.sh
-(cd vendor/tb322fc-linux/artifacts && sha256sum -c USB-NBD-SHA256SUMS)
+nix build .#boot-usb-nbd --out-link out/boot-usb-nbd
+nix run .#build-aarch64 -- .#rootfs-desktop --out-link out/rootfs-desktop
+(cd out/boot-usb-nbd && sha256sum -c SHA256SUMS)
 ```
 
-The script uses an isolated kernel output directory and writes
-`vendor/tb322fc-linux/artifacts/boot-usb-nbd.img`; it does not replace the
-previously verified `artifacts/boot.img`.
+Import the matching firmware and, when required, pass the public-only SSH
+configuration described in the [Nix build guide](../../../docs/public/build.md).
+The boot output contains `boot.img`; the rootfs output contains
+`nixos-rootfs.ext4`. Both links point to immutable Nix outputs. Existing
+historical `artifacts/` images are not updated by these builds.
 
 The USB variant keeps the DWC3 dual-role path
 (`CONFIG_USB_DWC3_DUAL_ROLE`), enables `CONFIG_USB_CONFIGFS_RNDIS` and
@@ -43,8 +46,8 @@ Open an elevated PowerShell window at the repository's Windows path and run:
 
 ```powershell
 .\tools\run-usb-nbd-fastboot.ps1 `
-  -BootImage .\vendor\tb322fc-linux\artifacts\boot-usb-nbd.img `
-  -RootfsImage .\artifacts\nixos-rootfs.ext4 `
+  -BootImage .\out\boot-usb-nbd\boot.img `
+  -RootfsImage .\out\rootfs-desktop\nixos-rootfs.ext4 `
   -FastbootSerial <serial> `
   -LogDirectory "$env:TEMP\y700-usb-nbd-test"
 ```

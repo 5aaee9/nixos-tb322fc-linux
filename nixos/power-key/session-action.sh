@@ -2,13 +2,30 @@ set -eu
 action=$1
 session=$(loginctl show-seat seat0 -p ActiveSession --value)
 test -n "$session"
-test "$(loginctl show-session "$session" -p User --value)" = "@UID@"
 test "$(loginctl show-session "$session" -p Active --value)" = yes
+session_uid=$(loginctl show-session "$session" -p User --value)
+session_class=$(loginctl show-session "$session" -p Class --value)
+if test "$session_uid" = "@UID@"; then
+    session_user=@USER@
+    session_home=/home/@USER@
+elif test "$session_class" = greeter; then
+    session_user=$(loginctl show-session "$session" -p Name --value)
+    case "$session_user" in
+        gdm|gdm-greeter) ;;
+        *) echo "Unsupported greeter account" >&2; exit 1 ;;
+    esac
+    test "$session_uid" = "$(id -u "$session_user")"
+    session_home=$(getent passwd "$session_user" | cut -d: -f6)
+    test -n "$session_home"
+else
+    echo "Unsupported active session" >&2
+    exit 1
+fi
 
 as_user() {
-    runuser -u @USER@ -- env HOME=/home/@USER@ \
-        XDG_RUNTIME_DIR=/run/user/@UID@ \
-        DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@UID@/bus \
+    runuser -u "$session_user" -- env HOME="$session_home" \
+        XDG_RUNTIME_DIR="/run/user/$session_uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$session_uid/bus" \
         "$@"
 }
 display_set() {
@@ -33,7 +50,8 @@ case "$action" in
         ;;
     menu)
         display_set 0
-        if test "$(loginctl show-session "$session" -p LockedHint --value)" = yes; then
+        if test "$session_class" != greeter &&
+            test "$(loginctl show-session "$session" -p LockedHint --value)" = yes; then
             echo "Locked session: display on; power dialog withheld"
             exit 0
         fi

@@ -1,0 +1,20 @@
+Subject: [PATCH] BaseTools: preserve POSIX quotes in compiler response flags
+
+The GCC path normalization converts escaped string quotes into slashes.
+Only normalize Windows paths on Windows. Native POSIX paths already use
+forward slashes. Firmware sources and runtime policy are unchanged.
+Applies to EDK2 aef4e86045bd151a54d33bab8ae5e8e62462a8f4.
+
+diff --git a/BaseTools/Source/Python/AutoGen/GenMake.py b/BaseTools/Source/Python/AutoGen/GenMake.py
+index bbb3c29..db73d97 100755
+--- a/BaseTools/Source/Python/AutoGen/GenMake.py
++++ b/BaseTools/Source/Python/AutoGen/GenMake.py
+@@ -891,7 +891,7 @@ cleanlib:
+                             else:
+                                 break
+ 
+-                        if self._AutoGenObject.ToolChainFamily == 'GCC':
++                        if self._AutoGenObject.ToolChainFamily == 'GCC' and os.name == 'nt':
+                             RespDict[Key] = Value.replace('\\', '/')
+                         else:
+                             RespDict[Key] = Value

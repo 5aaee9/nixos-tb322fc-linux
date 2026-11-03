@@ -1,97 +1,68 @@
 # Build
 
-## Host dependencies
+This vendored integration now builds through the parent project's pinned
+Nix flake. Follow the [complete Nix build guide](../../../docs/public/build.md)
+from the project root. The shell scripts in `scripts/` delegate to the same
+derivations; they no longer download compilers or compile mutable checkouts.
 
-The kernel and boot builder run on a Linux host. Required commands are:
-`git`, `python3`, `make`, `cc`, `curl`, `tar`, `sha256sum`,
-`aarch64-linux-gnu-gcc`, `clang`, `ld.lld`, LLVM binutils and `mkbootimg`.
-Kernel builds also need flex, bison, bc, Perl, pkg-config, OpenSSL and libelf
-development headers. BusyBox requires the cross compiler's static AArch64 libc.
-Builds have used Clang/LLD 21.1.8 and BusyBox 1.36.1.
+## Inputs and tools
 
-On Debian/Ubuntu these tools are provided by:
+Nix supplies the kernel toolchain, static AArch64 BusyBox, gen_init_cpio,
+mkbootimg, topology tools and filesystem packagers. `flake.lock` pins public
+sources and tooling; `sources.json` and the local patch manifests bind the
+board baseline. The kernel builder checks both the original and patched Git
+trees before compiling.
 
-```sh
-sudo apt install git python3 build-essential curl bzip2 flex bison bc \
-    pkg-config libssl-dev libelf-dev gcc-aarch64-linux-gnu \
-    libc6-dev-arm64-cross clang lld llvm mkbootimg m4 alsa-utils
-```
-
-Check the installed compiler versions; changing the compiler can change the
-configuration or generated code. Optional tools are `unpack_bootimg`, `fastboot`,
-`adb`, `device-tree-compiler` and `dtschema` for artifact/device/schema checks.
-If downloads require a proxy, set `https_proxy` and `http_proxy` in your shell.
-The build does not depend on a particular proxy or host username.
-
-## Sources
+Import this tablet's own matching firmware once:
 
 ```sh
-python3 scripts/fetch-sources.py
+nix run .#import-device-inputs -- \
+  --stock-directory /private/path/extracted-stock
 ```
 
-This fetches all entries in `sources.json` into `sources/`, applies bundled
-patches, and verifies each resulting Git tree. No unpublished commit is needed.
-Existing source directories are never reset or overwritten. To fetch just the
-kernel and topology macros, pass `kernel audioreach-topology wireless-regdb` as arguments.
+The importer builds the pinned AudioReach topology and regulatory database,
+finds the stock files by hash, and validates the complete 78-file manifest.
+For an already arranged directory, use `--firmware` instead. Firmware,
+calibration and stock backups are not public source inputs.
 
-The kernel base is official Linux 7.2 at
-`8d3ae59288f1e7d58d76558a6ee96d533bc5019f`. The locally maintained
-[kernel patch series](../patches/kernel/README.md) recreates the tested elden
-source tree without fetching a third-party kernel fork. Patched kernel and
-userspace source trees intentionally have staged changes; their expected
-post-patch trees are in the manifest.
+`scripts/fetch-sources.py` remains an optional development-checkout helper.
+Its downloaded trees are not consumed by the Nix builds.
 
-## Firmware and topology
-
-Follow [firmware preparation](firmware.md) to produce `inputs/firmware/`.
-The importer checks every file by content, including renamed stock firmware.
-Generate the audio topology before importing:
+## Kernel, initramfs and boot images
 
 ```sh
-mkdir -p build/audio
-m4 -I sources/audioreach-topology rootfs/audio/topology.m4 > build/audio/topology.conf
-alsatplg -c build/audio/topology.conf -o build/audio/Lenovo-Y700-Gen4-tplg.bin
+nix build .#initramfs-usb-nbd
+nix build .#boot-usb-nbd --out-link out/boot-usb-nbd
+nix build .#boot-persistent --out-link out/boot-persistent
+nix build .#kernel-efi --out-link out/kernel-efi
 ```
 
-The tested topology compiler is alsatplg 1.2.15.2. Expected output hash:
-`33288df358504392dcc1d70ebdff4dc7a9ec8f9936edb30a65b3faa88a2000ef`.
-An external `Secondary MI2S Playback` widget warning is expected; the machine
-driver supplies it. The firmware importer refuses a different output.
+Each boot output directory contains `boot.img`, the kernel, metadata and
+`SHA256SUMS`. The two Android header-v4 images embed their DTB and initramfs
+in the kernel; the external Android ramdisk is empty. Do not append a second
+DTB. The persistent image requires an installed `PARTLABEL=rootfs`; the
+USB/NBD image uses the separate host-delivered maintenance root.
 
-## Kernel and boot image
+The EFI kernel uses the separate external-initrd/DTB contract documented in
+the [board EFI guide](../../../docs/public/openabl-efi.md).
+
+Build parallelism is controlled with Nix's `--cores` and `--max-jobs`.
+Compatibility wrappers accept `ARTIFACT_DIR` as a **new output link** rather
+than a mutable build directory. Prefer the explicit flake commands above.
+
+## Validation and device testing
 
 ```sh
-bash scripts/build-boot.sh
+nix flake check --all-systems --no-build
+nix flake check
+(cd out/boot-usb-nbd && sha256sum -c SHA256SUMS)
 ```
 
-The script validates the kernel tree and firmware, downloads and verifies the
-BusyBox source archive, cross-builds a static AArch64 BusyBox, assembles the
-initramfs, builds Image/DTB, and packs an Android header-4 boot image. Set `JOBS`
-to change parallelism. `bash scripts/build-boot.sh initramfs` stops after the
-initramfs build.
+The build validates source trees, configuration, ARM64/DTB and Android header
+layout. Successful compilation does not establish hardware acceptance or
+byte-identical rebuilding. The Android version/date fields reproduce the
+packing layout and do not describe the Linux security-patch level.
 
-The supplied full kernel config keeps the tested hardware selections. Its
-host paths are replaced with absolute paths inside this checkout during the
-build. Unrelated module selections inherited from the base configuration do
-not require installing those modules for the built-in tablet drivers.
-
-The DTB and initramfs are embedded in Image; the external boot-image ramdisk
-is empty. Do not append another DTB. The forced kernel command line selects
-`root=PARTLABEL=rootfs`; edit both `configs/kernel.config` and
-`configs/cmdline.txt` consistently when changing it. Retention parameters in
-that command line are part of the device-tested kernel baseline.
-
-The Android version/date fields in the boot header reproduce the supported
-packing layout; they do not describe the Linux security-patch level.
-
-## Test
-
-With a prepared rootfs and the tablet already in fastboot:
-
-```sh
-fastboot boot artifacts/boot.img
-```
-
-Record the new image hash, kernel release, mount state and functional tests.
-Reusing a configuration does not make a rebuilt image byte-identical to an
-older one. No build script flashes or repartitions the tablet.
+Device operations remain separate. Follow the serial-scoped temporary-boot
+procedure in the [project guide](../../../docs/public/build.md#temporary-fastboot-test)
+only after reviewing the exact image and matching rootfs.
