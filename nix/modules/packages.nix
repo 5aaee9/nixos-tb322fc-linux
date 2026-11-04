@@ -54,6 +54,7 @@
           "flake.nix"
           "flake.lock"
           "nixos/persistent.nix"
+          "nix/profiles/y700-persistent.nix"
           "vendor/tb322fc-linux/sources.json"
         ];
       };

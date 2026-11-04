@@ -66,6 +66,7 @@
         "aarch64-linux"
       ];
       imports = [
+        ./nix/modules/nixos-modules.nix
         ./nix/modules/systems.nix
         ./nix/modules/packages.nix
         ./nix/modules/checks.nix

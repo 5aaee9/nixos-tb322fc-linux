@@ -1,10 +1,12 @@
-{ pkgs, ... }:
+{ config, lib, pkgs, ... }:
 
 {
-  systemd.services.display-manager.requires = [
-    "y700-usb-nbd-sleep-policy.service"
-    "y700-usb-nbd-prepare-shutdown.service"
-  ];
+  systemd.services.display-manager = lib.mkIf config.services.displayManager.enable {
+    requires = [
+      "y700-usb-nbd-sleep-policy.service"
+      "y700-usb-nbd-prepare-shutdown.service"
+    ];
+  };
 
   systemd.services.y700-usb-nbd-transport = {
     description = "Keep the initramfs NBD client alive through final shutdown";

@@ -1,13 +1,24 @@
-{ ... }:
+{ lib, pkgs, ... }:
 
 {
+  nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
+  assertions = [
+    {
+      assertion = pkgs.stdenv.hostPlatform.system == "aarch64-linux";
+      message = "The Y700 TB322FC module requires an aarch64-linux host platform.";
+    }
+  ];
+
   fileSystems."/" = {
-    device = "/dev/disk/by-partlabel/rootfs";
-    fsType = "ext4";
-    options = [ "noatime" "errors=remount-ro" ];
+    device = lib.mkDefault "/dev/disk/by-partlabel/rootfs";
+    fsType = lib.mkDefault "ext4";
+    options = lib.mkDefault [
+      "noatime"
+      "errors=remount-ro"
+    ];
   };
 
   # The target kernel and Android boot image provide the actual early
   # hardware support. These values document the rootfs contract only.
-  swapDevices = [ ];
+  swapDevices = lib.mkDefault [ ];
 }

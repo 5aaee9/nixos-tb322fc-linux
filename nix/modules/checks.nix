@@ -2,6 +2,17 @@
 {
   perSystem = { pkgs, y700, ... }: {
     checks = {
+      nixos-modules = import ../../tests/nixos-modules.nix {
+        inherit self inputs pkgs;
+      };
+      power-key-action =
+        (inputs.nixpkgs.lib.nixosSystem {
+          system = pkgs.stdenv.hostPlatform.system;
+          modules = [
+            self.nixosModules.power-key
+            { services.desktopManager.gnome.enable = true; }
+          ];
+        }).config.system.build.y700PowerKeyAction;
       kshimc-menu = y700.kshim.menuCheck;
       host-contracts =
         pkgs.runCommand "y700-host-contracts"
@@ -20,6 +31,7 @@
             export KSHIM_PACKER=${y700.kshim.packer}/bin/MultiBootKernelPatcher
             python -m unittest discover -s tests -p 'test_kshimc_image.py' -v
             python -m unittest discover -s tests -p 'test_efi_generation.py' -v
+            python -m unittest discover -s tests -p 'test_power_key_session.py' -v
             touch "$out"
           '';
       source-pins =

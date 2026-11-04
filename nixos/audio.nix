@@ -1,4 +1,9 @@
-{ pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 let
   boardUcm = pkgs.runCommand "alsa-ucm-conf-tb322fc" { } ''
@@ -11,9 +16,15 @@ let
 in
 {
   # Keep the board routing files separate from ALSA and the desktop policy.
-  systemd.user.services.wireplumber.environment = ucmEnvironment;
-  systemd.user.services.pipewire.environment = ucmEnvironment;
-  systemd.user.services.pipewire-pulse.environment = ucmEnvironment;
+  systemd.user.services = lib.mkIf config.services.pipewire.enable {
+    wireplumber = lib.mkIf config.services.pipewire.wireplumber.enable {
+      environment = ucmEnvironment;
+    };
+    pipewire.environment = ucmEnvironment;
+    pipewire-pulse = lib.mkIf config.services.pipewire.pulse.enable {
+      environment = ucmEnvironment;
+    };
+  };
   environment.sessionVariables = ucmEnvironment;
   environment.systemPackages = [ pkgs.alsa-utils ];
 }

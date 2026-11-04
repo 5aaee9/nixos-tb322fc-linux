@@ -121,6 +121,7 @@ def main():
         "diagnostics": "trusted-host USB SSH development policy remains; not a release image",
         "source_sha256": {str(path.relative_to(PROJECT)): digest(path) for path in [
             PROJECT / "flake.nix", PROJECT / "flake.lock", PROJECT / "nixos/persistent.nix",
+            PROJECT / "nix/profiles/y700-persistent.nix",
             Path(__file__).resolve(),
         ]},
     }

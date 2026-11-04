@@ -3,8 +3,6 @@
 {
   imports = [ ./audio.nix ];
 
-  networking.hostName = "y700-elden";
-
   # Device firmware and calibration are imported from the user's own matching
   # Android build in a later step. No binary firmware is committed here.
   environment.etc."y700/reference-firmware.json".source =

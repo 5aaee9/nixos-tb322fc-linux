@@ -3,26 +3,47 @@ action=$1
 session=$(loginctl show-seat seat0 -p ActiveSession --value)
 test -n "$session"
 test "$(loginctl show-session "$session" -p Active --value)" = yes
+test "$(loginctl show-session "$session" -p Seat --value)" = seat0
+test "$(loginctl show-session "$session" -p Remote --value)" = no
+case "$(loginctl show-session "$session" -p Type --value)" in
+    wayland|x11) ;;
+    *) echo "Unsupported session type" >&2; exit 1 ;;
+esac
 session_uid=$(loginctl show-session "$session" -p User --value)
+case "$session_uid" in
+    ""|*[!0-9]*|0) echo "Invalid desktop UID" >&2; exit 1 ;;
+esac
 session_class=$(loginctl show-session "$session" -p Class --value)
-if test "$session_uid" = "@UID@"; then
-    session_user=@USER@
-    session_home=/home/@USER@
-elif test "$session_class" = greeter; then
-    session_user=$(loginctl show-session "$session" -p Name --value)
-    case "$session_user" in
-        gdm|gdm-greeter) ;;
-        *) echo "Unsupported greeter account" >&2; exit 1 ;;
-    esac
-    test "$session_uid" = "$(id -u "$session_user")"
-    session_home=$(getent passwd "$session_user" | cut -d: -f6)
-    test -n "$session_home"
-else
-    echo "Unsupported active session" >&2
-    exit 1
-fi
+session_user=$(loginctl show-session "$session" -p Name --value)
+test -n "$session_user"
+case "$session_class" in
+    greeter)
+        case "$session_user" in
+            gdm|gdm-greeter) ;;
+            *) echo "Unsupported greeter account" >&2; exit 1 ;;
+        esac
+        ;;
+    user)
+        case "$session_user" in
+            gdm|gdm-greeter) echo "Greeter is not a user session" >&2; exit 1 ;;
+        esac
+        ;;
+    *) echo "Unsupported active session" >&2; exit 1 ;;
+esac
+test "$session_uid" = "$(id -u "$session_user")"
+IFS=: read -r account_name _ account_uid _ _ session_home _ \
+    <<< "$(getent passwd "$session_user")"
+test "$account_name" = "$session_user"
+test "$account_uid" = "$session_uid"
+case "$session_home" in
+    /*) ;;
+    *) echo "Invalid account home" >&2; exit 1 ;;
+esac
 
 as_user() {
+    # Do not send a delayed key action to a session that lost the active seat.
+    test "$(loginctl show-seat seat0 -p ActiveSession --value)" = "$session"
+    test "$(loginctl show-session "$session" -p Active --value)" = yes
     runuser -u "$session_user" -- env HOME="$session_home" \
         XDG_RUNTIME_DIR="/run/user/$session_uid" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$session_uid/bus" \

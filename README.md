@@ -55,9 +55,27 @@ nix run .#build-aarch64 -- .#rootfs-desktop --out-link result-rootfs
 Import the matching own-tablet firmware first as described in the build guide.
 On an ARM64 build host, `nix build .#rootfs-desktop` works directly.
 
+For your own deployment, import `nixosModules.default` (or `y700`) and
+optionally `nixosModules.gnome`, then add your own configuration:
+
+```nix
+modules = [
+  inputs.y700.nixosModules.default
+  inputs.y700.nixosModules.gnome
+  ./configuration.nix
+];
+```
+
+Neither exported module creates a `y700` user, enables automatic login or
+opens development SSH. The separate `development` module opts into USB
+diagnostics. See [module composition and deployment](docs/public/modules.md)
+for a complete flake example and the boundary between userspace configuration
+and the separately built boot image.
+
 The desktop development configuration accepts an external SSH public key and
 creates a disposable `y700` account with automatic login and an empty local
-password. It is intended for attended development on a trusted USB connection.
+password through its unexported `nix/profiles/` files. It is intended for
+attended development on a trusted USB connection.
 The USB cable and NBD server must remain available while Linux uses this rootfs.
 
 For internal storage, follow the [complete installation workflow](docs/public/install.md)

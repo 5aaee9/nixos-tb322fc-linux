@@ -47,6 +47,13 @@ old `Y700_DEBUG_PUBLIC_KEY_FILE` environment variable is no longer read.
 The default `nix/device-config/default.nix` contains no key and installs no
 root authorized key.
 
+To integrate the device into your own NixOS configuration instead of using
+these repository image profiles, import the exported `default` and `gnome`
+modules. They define no normal user or automatic login and do not enable
+SSH. The optional `development` export provides USB diagnostics. The
+[module guide](modules.md) includes a complete consumer flake, custom-user
+example and migration notes for the former `desktop` export.
+
 AVB signing remains an explicit host-side app so private keys never enter a
 Nix derivation or store: `nix run .#sign-boot-avb -- --help`. It uses pinned
 avbtool/OpenSSL, takes the key and template at runtime and refuses an existing
