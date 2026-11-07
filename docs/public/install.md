@@ -2,7 +2,9 @@
 
 `tools/install-nixos.py` coordinates a fresh NixOS GNOME installation on an
 already unlocked **TB322FC / elden, SM8750, 16+512 GB** using Windows and WSL.
-It allocates **256 GiB total: 1 GiB FAT32 `linux-esp` and 255 GiB ext4 `rootfs`**.
+It allocates **256 GiB total: 1 GiB FAT32 `linux-esp` and 255 GiB `rootfs`**.
+Current persistent archives select Btrfs; older archives without a filesystem
+type retain the original ext4 behavior.
 Android keeps about 193.747 GiB of raw userdata space and remains the default
 boot path. This is a reset-and-recreate installation: **Android user data is
 erased**, not resized in place.
@@ -18,6 +20,9 @@ active slot. Its writes are the stock reset request in `misc`, the data LUN's
 GPT, the stock recovery's userdata/metadata reset, and the two new Linux
 filesystems. It does not install OpenABL or systemd-boot. Linux continues to
 start through `fastboot boot`; the ESP is reserved for future boot integration.
+For an existing installation and the separately installable Android/Linux
+boot menu, see the [Btrfs migration guide](btrfs.md). This coordinator does
+not migrate an existing filesystem or install that menu.
 
 ## 1. Prerequisites and data backup
 
@@ -99,9 +104,11 @@ nix build .#boot-persistent --out-link out/install-persistent-boot
 ```
 
 The archive builder verifies and registers the Nix store closure and records
-source pins. The persistent account starts locked, with automatic login
-disabled. During installation, a private password is generated and tested
-for persistence. Both boot images contain matching own-tablet firmware.
+source pins and the root filesystem type. The persistent development
+account has a locked initial password and GNOME automatic login enabled.
+During installation, a private password is generated and tested for
+persistence. Exported hardware and GNOME modules create no development
+account. Both boot images contain matching own-tablet firmware.
 
 Record the local inputs for configuration:
 
@@ -215,7 +222,7 @@ the original Android build/slot and the exact expected GPT before continuing:
 4. Checks both filesystems and unchanged Android partitions/GPTs. Only after
    success does it publish the rootfs boot contract.
 5. Returns to Android, performs a persistent `fastboot boot`, verifies internal
-   writable ext4 with no NBD/overlay, and initializes the `y700` password.
+   writable rootfs with no NBD/overlay, and initializes the `y700` password.
 6. Returns to Android again, boots Linux a second time and checks that the
    password and test marker survived, with GDM and required services healthy.
 
@@ -245,7 +252,8 @@ recovery. Do not delete state or use a new directory to bypass the stop, and
 do not blindly restore GPT after Android has recreated `/data`. Backup GPT
 bytes alone cannot reconstruct the erased Android data.
 
-Normal reboot returns to Android. For later Linux boots, use the
+With the stock boot image retained by this coordinator, normal reboot
+returns to Android. For later Linux boots, use the
 [installed-root boot helper](persistent-rootfs.md#boot-an-approved-installation):
 
 ```powershell
@@ -262,8 +270,10 @@ Set these variables to your recorded inputs. First verify the tablet in
 Android, then use serial-scoped `adb reboot bootloader`. The helper performs
 the single RAM boot and configures USB diagnostics; it never serves NBD.
 After a successful internal-root boot, disconnecting USB does not remove the
-root filesystem. Suspend is still disabled. Autonomous Linux startup,
-OpenABL and systemd-boot generation loading remain separate work.
+root filesystem. Suspend is still disabled. The separate
+[installed Android/Linux menu](btrfs.md) provides normal Linux startup
+through systemd-boot; this fresh-install coordinator does not install it.
+OpenABL and independent generation updates from disk ESP remain unsupported.
 
 ## Installer validation
 

@@ -1,5 +1,118 @@
 # Tested configuration and limits
 
+## November 7, 2026 installed Btrfs desktop
+
+The existing 255 GiB Linux rootfs was converted to Btrfs after a clean ext4
+check and complete private backup. All 171,510 original regular-file hashes
+match after conversion. The label, UUID and partition geometry are retained,
+and `ext2_saved` remains available. On-device read-only Btrfs checks report
+no errors, with conversion-layout alignment warnings preserved in the logs.
+No balance, defragmentation or rollback-subvolume deletion was performed.
+
+One Android-preserving menu image was written to `boot_a` and read back in
+full. Its SHA-256 is
+`920f6a576a21476a79681c175dbd46e1505cb49d7ace1efe0f9b855d4d4287bf`.
+A normal installed boot now passes:
+
+```text
+stock ABL -> installed kShimC -> RAM U-Boot EFI -> systemd-boot 260.5
+          -> Linux 7.2.0-y700-efi -> NixOS generation 3 -> GNOME 50.5
+```
+
+The root mount is Btrfs, writable, with `noatime,compress=zstd:1`. It has no
+RAM overlay or NBD dependency. GDM automatically opens an active `y700`
+Wayland session. All five Btrfs device-error counters and the failed system
+service count are zero. Complete protected-image hashes and all twelve GPT
+edge hashes match the pre-install records; original ABLs, inactive boot,
+init_boot/vendor_boot/dtbo, ESP and slot a are retained.
+
+The menu defaults to Linux after ten seconds and retains the exact original
+Android kernel and selectable Android entry. This installed-image test
+validates Linux startup; it has not repeated an Android round trip or
+physical screen/audio acceptance. The EFI UCM fallback is included, but
+Wi-Fi association and physical speaker output remain subject to the
+peripheral limitations recorded below. Suspend remains disabled.
+
+EFI media is still embedded in the boot image. Independent generation
+deployment to the disk ESP and physical key input in systemd-boot are not
+implemented. See [Btrfs and installed menu](btrfs.md) for build and migration
+boundaries. The following RAM trials are historical evidence.
+
+## Earlier November 7, 2026 RAM UEFI NixOS desktop
+
+The earlier RAM trial booted through stock ABL, kShimC, RAM U-Boot EFI and
+systemd-boot 260.5 into the installed NixOS generation 2. The kernel is
+Linux 7.2.0-y700-efi. GDM starts successfully; an active GNOME 50.5 Wayland
+desktop was verified after a temporary RAM-only login. Its original login
+configuration was restored. No system service is failed.
+
+The previously dirty Linux rootfs was repaired with the owner's permission
+in the known RAM/NBD maintenance environment and passed a full on-device
+read-only consistency check. The subsequent EFI trial keeps all 120 UFS
+nodes read-only and mounts that healthy root ro,norecovery beneath a 2 GiB
+RAM overlay. The final session does not depend on NBD.
+
+The tested UEFI-autostart image SHA-256 is
+`0db8cc5bb62afa7545df802162be677265f13b38e96e2679ba8a1c8d17a9d9da`.
+It is still loaded with `fastboot boot`. Stock ABL, Android, slot a and
+installed boot images are retained. Physical desktop/touch confirmation
+of this EFI session, permanent menu installation and generation deployment
+to ESP remain separate acceptance items. This does not validate OpenABL.
+
+The owner's subsequent peripheral report exposes an EFI-specific UCM
+selection failure: SMBIOS changes the sound-card long name. A new
+board-name-guarded driver fallback restores the existing HiFi/Speaker route
+in RAM, and real stereo PCM plus a bounded test-tone playback pass.
+Physical sound confirmation and deployment of the new UCM package remain
+pending. The current image itself still contains the old UCM.
+
+Wi-Fi enumerates and scans both bands with the matching own-device
+firmware, but the selected WPA3 access point rejects SAE confirmation.
+A live SAE-only comparison reproduces the rejection without FT roaming.
+This session has no successful association/DHCP acceptance; credential
+re-entry or AP-side evidence is needed before assigning a root cause.
+
+## November 6, 2026 RAM UEFI chain
+
+One independently reviewed `fastboot boot` now passes the actual tablet
+chain: stock ABL -> kShimC -> RAM U-Boot EFI -> systemd-boot 260.5 ->
+Linux 7.2.0-y700-efi -> rootless diagnostic userspace. USB evidence records
+the provider and selected `y700-efi-diag.conf` entry. The tested image
+SHA-256 is `a247d1fe379d33edfbaec6fadcf8c395d8650e9abfeb5beaac2c46d5e776d459`.
+
+All 120 UFS nodes were read-only and no physical filesystem was mounted.
+The diagnostic automatically returned to retained Android .229 on slot a;
+host network cleanup passed. This validates the EFI/Linux diagnostic
+chain. At that stage, full NixOS/GNOME, installed-generation selection and
+persistent EFI variables were unvalidated through this provider.
+
+The subsequent readonly rootfs inspection finds pending journal recovery
+and orphan flags. Prior directory checksum errors remain unresolved, so
+the conditional full NixOS/GNOME trial stops before mounting or booting.
+No filesystem repair or write follows that inspection.
+
+Separately, an offline correction to the readonly init's RAM fstab and
+early devtmpfs aliases passes a control/corrected QEMU comparison with
+the actual NixOS stage2, activation and systemd. The remount service
+succeeds and all six synthetic disks remain byte-identical. The resulting
+v4 EFI image was built but untested at that point. The separately authorized
+November 7 repair and target trial above subsequently cleared those gates.
+
+## Display-off limitation
+
+Display blanking in the previously tested kernel can leave the AW99706
+backlight enabled: its update callback used the saved brightness without
+honoring the backlight core power/blanking state. A disabled DRM connector
+or `bl_power=4` alone did not establish physical backlight-off.
+
+The separate local patch
+`0002-backlight-aw99706-honor-blanking.patch` uses effective brightness.
+The actual callbacks pass 12 simulated register-state checks, and Nix
+verifies the patched source tree and compiles the ARM64 driver. That tree
+now boots in the rootless EFI diagnostic, but the display-off behavior has
+not been tested on the tablet. Physical darkness and restored display
+and touch remain required; real suspend is still disabled.
+
 ## November 3, 2026 Nix build migration
 
 Artifact construction now uses `flake-parts`, the existing pinned stable
@@ -102,9 +215,18 @@ candidate. The complete 48-byte Sahara root response matches both stock
 roots and differs from both OpenABL images. Firmware authentication is the
 leading failure explanation, with no captured crash-time firmware error.
 See the [source and signing comparison](openabl-efi.md#what-the-upstream-signed-filename-means).
-There is no working OpenABL installation or new candidate flash.
-A RAM EFI provider behind stock ABL remains an alternate investigation and
-is not yet a tested tablet boot path.
+There is no working OpenABL installation.
+A RAM EFI provider behind stock ABL subsequently passed the November 6
+rootless diagnostic described at the top of this page.
+
+On November 4, one separately reviewed fastboot `abl_a` candidate request
+transferred 1024 KB but was rejected with
+`Flashing is not allowed for Critical Partitions`. Fresh critical-unlock
+state remained false. No stock-restoration flash was needed; one normal
+reboot returned to completed Android `.229`, slot a, with the same physical
+USB identity and a changed boot ID. No EDL, critical unlock, erase, slot
+change or other partition command was issued. This is a rejected write,
+not an OpenABL boot or XBL authentication test.
 
 The dated record below describes the earlier USB/NBD system tested on
 November 1, 2026. It is separate from the vendored reference project's
@@ -118,8 +240,10 @@ hardware matrix and `validation.json`.
 - Current source packaging: official Linux
   `8d3ae59288f1e7d58d76558a6ee96d533bc5019f` plus the
   [local kernel patches](../../vendor/tb322fc-linux/patches/kernel/README.md).
-  The resulting tree is identical to the tested kernel tree. This packaging
-  check does not claim a new image build or device test.
+  The first patch reproduces the tested kernel tree. With the display-off
+  fix, the current tree is `28aac546fa1a11a7ed0847f1680ac1fec0100c6d`,
+  which subsequently booted through EFI; physical display-off acceptance
+  remains pending.
 - Nixpkgs: `da6dc0e7b26060f2f71ce3ef7088fb56ee44fa36`.
 - Firmware inventory: `vendor/tb322fc-linux/firmware-tb322fc-prc.json`,
   78 files checked against the matching stock inputs.
@@ -138,7 +262,7 @@ developer's SSH key or filesystem build metadata will change image hashes.
 | --- | --- |
 | Boot | Serial-scoped `fastboot boot` reaches the expected NixOS system. No Linux partition write or slot change is part of this test path. |
 | GNOME | GDM automatically enters an active Wayland desktop. |
-| Display | Native DSI panel/backlight active; display-only off/on cycles pass machine checks. Physical panel observation after the final power-key change remains pending. |
+| Display | Native DSI panel/backlight active; connector/core blanking cycles pass. AW99706 can retain its light output during blanking; the separate fix has offline tests only. Physical backlight-off and recovery are not yet accepted. |
 | Touch | Owner confirmed touch on an earlier desktop image; touch firmware reload is observed after display cycling. Full gesture/resume acceptance is not claimed. |
 | GPU | GNOME uses MSM/GBM/EGL and measured GPU execution increases. Conformance and sustained workloads are not validated. |
 | Wi-Fi | Owner joined a network and authenticated SSH succeeded on an earlier image. The fresh disposable overlay has no saved Wi-Fi credentials. |

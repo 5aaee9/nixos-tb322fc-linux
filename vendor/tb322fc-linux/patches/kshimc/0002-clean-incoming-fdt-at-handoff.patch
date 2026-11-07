@@ -1,0 +1,112 @@
+diff --git a/vendor/kshim/src/arch/arm64/mmu.c b/vendor/kshim/src/arch/arm64/mmu.c
+index 71b5730..f771669 100644
+--- a/vendor/kshim/src/arch/arm64/mmu.c
++++ b/vendor/kshim/src/arch/arm64/mmu.c
+@@ -417,6 +417,9 @@ static void clean_range(uint64_t base, uint64_t size)
+     for (uint64_t address = align_down(base, line_size);
+          address < end; address += line_size)
+         __asm__ volatile("dc civac, %0" : : "r"(address) : "memory");
++#elif defined(KSHIM_MMU_TEST)
++    extern void kshim_mmu_test_clean_range(uint64_t base, uint64_t size);
++    kshim_mmu_test_clean_range(base, size);
+ #else
+     (void)base;
+     (void)size;
+@@ -792,8 +795,21 @@ int kshim_mmu_configure_early(const kshim_mmu_early_config_t *config)
+             status = -9;
+             goto failed;
+         }
++        if (dt_size == 0U || dt_base > UINT64_MAX - dt_size ||
++            mMmu.region_count >= MMU_MAX_REGIONS) {
++            status = -9;
++            goto failed;
++        }
++        /* Diagnostics can dirty the incoming DT outside the shim image.
++         * Track exactly the validated mapping for PoC cleanup at handoff. */
++        mMmu.regions[mMmu.region_count++] = (kshim_mmu_region_t){
++            .base = dt_base,
++            .size = dt_size,
++            .type = KSHIM_MMU_NORMAL_WB,
++            .permissions = KSHIM_MMU_READ | KSHIM_MMU_WRITE,
++        };
+     }
+-    /* Only the image is written through the cache by this runtime. */
++    /* Includes the scratch handoff DT, stack, BSS and page tables. */
+     mMmu.regions[mMmu.region_count++] = (kshim_mmu_region_t){
+         .base = image_base,
+         .size = image_span,
+diff --git a/vendor/kshim/tests/CMakeLists.txt b/vendor/kshim/tests/CMakeLists.txt
+index 661028a..db84cf5 100644
+--- a/vendor/kshim/tests/CMakeLists.txt
++++ b/vendor/kshim/tests/CMakeLists.txt
+@@ -129,6 +129,7 @@ add_custom_target(dt_fixtures DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/fixtures/kona-
+ add_dependencies(dt_test dt_fixtures)
+ target_compile_definitions(dt_test PRIVATE "GENERATED_FIXTURES=\"${CMAKE_CURRENT_BINARY_DIR}/fixtures\"")
+ kshim_test(mmu_test mmu_test.c "${KSHIM_ROOT}/src/arch/arm64/mmu.c")
++target_compile_definitions(mmu_test PRIVATE KSHIM_MMU_TEST=1)
+ target_include_directories(mmu_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+ target_link_libraries(mmu_test PRIVATE kshim_dt)
+ 
+diff --git a/vendor/kshim/tests/mmu_test.c b/vendor/kshim/tests/mmu_test.c
+index eef162c..2112f84 100644
+--- a/vendor/kshim/tests/mmu_test.c
++++ b/vendor/kshim/tests/mmu_test.c
+@@ -2,11 +2,50 @@
+ #include <assert.h>
+ #include <stdint.h>
+ #include <stdio.h>
++#include <string.h>
+ #include <kshim_mmu.h>
+ #include <dt.h>
+ __asm__(".pushsection .test_image,\"aw\",@progbits\n.balign 4096\n"
+         ".global __image_start_address__\n__image_start_address__:\n.space 8192\n"
+         ".global __image_end_address__\n__image_end_address__:\n.popsection\n");
++extern unsigned char __image_start_address__[], __image_end_address__[];
++static struct dt_range cleaned[16];
++static size_t clean_count;
++void kshim_mmu_test_clean_range(uint64_t base, uint64_t size)
++{
++    assert(clean_count < 16);
++    cleaned[clean_count++] = (struct dt_range){base, size};
++}
++
++static void test_early_handoff_cleanup(void)
++{
++    uint64_t tree[512];
++    assert(!fdt_create_empty_tree(tree, sizeof(tree)));
++    assert(!fdt_setprop_u32(tree, 0, "#address-cells", 2));
++    assert(!fdt_setprop_u32(tree, 0, "#size-cells", 2));
++    int memory = fdt_add_subnode(tree, 0, "memory@80000000");
++    assert(memory >= 0);
++    assert(!fdt_setprop_string(tree, memory, "device_type", "memory"));
++    fdt64_t reg[] = {cpu_to_fdt64(0x80000000), cpu_to_fdt64(0x40000000)};
++    assert(!fdt_setprop(tree, memory, "reg", reg, sizeof(reg)));
++    uint32_t branch = 0x14000000;
++    memcpy(__image_start_address__, &branch, sizeof(branch));
++    memcpy(__image_start_address__ + 56, "ARM\x64\0\0\0\0", 8);
++    kshim_mmu_early_config_t early = {
++        .fdt = tree, .payload_base = 0xa0000000, .payload_end = 0xa1000000,
++    };
++    assert(!kshim_mmu_configure_early(&early));
++    clean_count = 0;
++    assert(!kshim_mmu_prepare_handoff());
++    /* Do not sweep all declared RAM or the MMIO/framebuffer window. */
++    assert(clean_count == 2);
++    assert(cleaned[0].base == (uint64_t)(uintptr_t)tree);
++    assert(cleaned[0].size == sizeof(tree));
++    assert(cleaned[1].base == (uint64_t)(uintptr_t)__image_start_address__);
++    assert(cleaned[1].size ==
++           (uint64_t)(__image_end_address__ - __image_start_address__));
++    clean_count = 0;
++}
+ static uint64_t entry(uint64_t a)
+ {
+     uint64_t *table=(void*)(uintptr_t)kshim_mmu_root_table(); assert(table);
+@@ -19,6 +58,7 @@ static uint64_t entry(uint64_t a)
+ }
+ int main(void)
+ {
++    test_early_handoff_cleanup();
+     kshim_mmu_region_t maps[]={
+         {0xa90000,4,KSHIM_MMU_DEVICE,KSHIM_MMU_READ|KSHIM_MMU_WRITE},
+         {0xa90010,4,KSHIM_MMU_DEVICE,KSHIM_MMU_READ|KSHIM_MMU_WRITE},

@@ -198,6 +198,7 @@ try {
     New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $BindAddress `
         -PrefixLength 24 -AddressFamily IPv4 -PolicyStore ActiveStore | Out-Null
     $addedAddress = $true
+    Wait-GadgetIPv4Address $adapter $BindAddress
     Assert-GadgetRoute $adapter $DeviceAddress
     $firewallRule = New-NetFirewallRule -DisplayName $firewallRuleName `
         -Direction Inbound -Action Allow -Protocol TCP -LocalPort $Port `

@@ -28,15 +28,18 @@ let
       number,
       toplevel ? system,
       usbDebug ? false,
+      readonlyRoot ? false,
+      kernel ? boot.kernels.efi,
     }:
     pkgs.runCommand "y700-efi-generation-${toString number}"
       {
         nativeBuildInputs = [ pkgs.python3 ];
       }
       ''
-        python ${project}/tools/build-efi-generation.py --kernel ${boot.kernels.efi} \
+        python ${project}/tools/build-efi-generation.py --kernel ${kernel} \
           --system ${toplevel} --generation ${toString number} --out "$out" \
           ${pkgs.lib.optionalString usbDebug "--usb-debug"} \
+          ${pkgs.lib.optionalString readonlyRoot "--readonly-root"} \
           --firmware ${firmware} --busybox ${boot.busybox}/bin/busybox \
           --gen-init-cpio ${boot.genInitCpio}/bin/gen_init_cpio
       '';

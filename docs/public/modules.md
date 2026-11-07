@@ -59,7 +59,7 @@ The organization follows the reference project's separation of
 
 ## Device and desktop policy
 
-The device module defaults to `aarch64-linux` and an ext4 root at
+The device module defaults to `aarch64-linux` and a Btrfs root at
 `/dev/disk/by-partlabel/rootfs`. Hostname and `system.stateVersion` belong to
 the consumer. Root mount defaults use `mkDefault` so an explicit consumer
 setting takes precedence; any changed root device must also agree with the
@@ -103,14 +103,14 @@ closure and deployment credentials are ready, standard NixOS deployment
 tools can activate that configuration on the installed Linux system.
 This module refactor itself performs no deployment or device operation.
 
-The current device module preserves the Android boot-image handoff: the
-board kernel, firmware-bearing initramfs and `fastboot boot` image are
-separate artifacts. Importing it does not turn a generic NixOS kernel into
-the TB322FC kernel, flash a boot image, install systemd-boot, write the ESP,
-or complete the outstanding UEFI chain. The generic kernel that NixOS
-records in its system closure is not the board boot artifact. Updating the
-userspace closure and updating that early-boot artifact remain separate.
-Use the matching own-tablet firmware and the existing boot procedure.
+The board kernel, firmware-bearing initramfs and Android boot image are
+separate artifacts. The stock-ABL/kShimC UEFI provider can run systemd-boot;
+its current EFI filesystem is embedded in the boot image. Importing a module
+does not build or install that boot image, write the disk ESP, or substitute
+the generic NixOS kernel for the TB322FC kernel. Updating the userspace
+closure and updating the embedded kernel/initrd remain separate operations.
+Use the matching own-tablet firmware and the
+[Btrfs/installed-menu procedure](btrfs.md).
 
 ## Repository image profiles
 
@@ -121,8 +121,9 @@ unexported files under `nix/profiles/`:
 - `elden` retains GNOME with no normal user.
 - `elden-desktop` adds the disposable `y700` user, UID 1000, an empty initial
   local password and automatic login.
-- `elden-persistent` locks that user's initial password and disables
-  automatic login; the installer supplies the private password.
+- `elden-persistent` locks that user's initial password and enables
+  GNOME automatic login for attended development; the fresh installer
+  supplies a private password.
 
 The packaged `rootfs*` artifacts still use these repository profiles.
 Importing the modules into a different flake does not import those accounts.

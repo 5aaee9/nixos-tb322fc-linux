@@ -1,4 +1,4 @@
-# Nix build and temporary boot
+# Nix builds and boot images
 
 All board artifacts are built by the pinned flake. The flake is organized with
 `flake-parts` under `nix/modules/` and `nix/packages/`; the host only needs Nix
@@ -70,12 +70,15 @@ nix flake check --all-systems --no-build
 nix flake check
 nix build .#boot-usb-nbd --out-link result-boot-usb-nbd
 nix build .#boot-persistent
-nix build .#rootfs              # persistent ext4 image
+nix build .#rootfs              # persistent Btrfs image
 nix build .#rootfs-archive      # registered installation tarball
 nix build .#rootfs-desktop
 nix build .#efi-generation
 nix build .#efi-esp
 nix build .#kshimc-packer .#kshimc-runtime .#boot-kshimc
+nix build .#boot-kshimc-linux-ram # Android default + Linux RAM-overlay experiment
+nix build .#boot-kshimc-uefi-ram # Android default + rootless RAM EFI-chain diagnostic
+nix build .#boot-kshimc-uefi-persistent # Linux default + retained Android; add AVB footer before installation
 nix build .#audio-topology .#wireless-regdb
 ```
 
@@ -115,7 +118,83 @@ nix flake check
 A result link points to a Nix store directory. Do not copy firmware or
 calibration data from another tablet into an output.
 
+## kShimC Linux RAM experiment
+
+`boot-kshimc-linux-ram` retains the original Android kernel and adds a Linux
+entry using `kernel-readonly`. That kernel keeps the built-in elden DT and
+initramfs. It reads the existing `PARTLABEL=rootfs` installation with ext4
+`ro,noload` or Btrfs `ro,rescue=nologreplay`, locks UFS block devices
+read-only, and uses a disposable 2 GiB RAM overlay for writable state.
+It requires an existing installation; it
+does not install NixOS. The ordinary `boot-persistent` retains writable-root
+behavior.
+
+This combined image is about 111.5 MiB, larger than the 96 MiB boot partition.
+It is only a `fastboot boot` candidate and must never be flashed. The packer
+has a separate 128 MiB RAM policy ceiling; the original installed-image size
+bound remains unchanged. A fresh device `max-download-size` measurement and
+independent review of the exact image/runner are required before a test.
+Neither the policy ceiling nor that measurement proves ABL placement or
+hardware acceptance.
+
+The menu defaults to Android after ten seconds. Selecting Linux tests direct
+kernel handoff; it does not provide UEFI, systemd-boot, or independent kernel
+generation selection. The source includes live Linux memory-range checks
+and defaults back to Android on rejection.
+
+The November 3, 2026 target trial reached the installed NixOS 26.05 GDM
+greeter through this entry. SSH verified the overlay, its read-only ext4
+lower mount and all 120 UFS block nodes read-only. The persistent root's
+ext4 fstab caused `systemd-remount-fs` to fail on overlay, so this is
+an experimental boot result, not release acceptance. The installed root
+also reports pending journal recovery and directory checksum errors with
+replay suppressed. A validated consistent lower filesystem is still required;
+do not remount the actual partition writable to bypass this test constraint.
+The combined image
+used in that trial has SHA-256
+`cbd09ec4a3b9e6eb0e2b8a50599bcb749c09ec7c0006dd4f64c176bdcc710e80`.
+
+The November 6 readonly init revision supplies an overlay-only fstab under
+`/run`, a runtime remount-service drop-in and early devtmpfs aliases.
+An offline QEMU comparison using the actual NixOS stage2, activation and
+systemd reproduces the old remount failure and passes with the correction;
+all six synthetic disk hashes remain unchanged. This RAM-test contract
+does not activate additional installed fstab mounts. The initial rootfs
+health inspection stopped target testing because recovery and orphan flags
+were pending. After the separately authorized November 7 on-device repair,
+the corrected init reached NixOS/GNOME through UEFI. The init correction
+itself does not repair or establish filesystem consistency; see the
+[dated hardware results](status.md).
+
+The current board driver shares the USB data controller between sockets
+and prioritizes the long edge. Keeping the long-edge computer/debug cable
+attached can prevent short-edge OTG enumeration. The owner confirmed a
+short-edge mouse works after detaching the long-edge computer cable.
+Keyboard operation and simultaneous data use of both sockets are not
+established.
+
 ## Temporary fastboot test
+
+The separate `boot-kshimc-uefi-ram` experiment uses a source-built U-Boot
+RAM provider, the unmodified pinned systemd-boot EFI application and an
+external EFI kernel/initrd. It does not replace ABL. Its provider has no
+physical storage or persistent-variable backend. The first initrd mounts
+no physical filesystem; its purpose is proving EFI handoff, not starting
+NixOS or installing an ESP. The actual provider has passed A/B entry
+selection in QEMU; this alone is not tablet acceptance.
+
+The first tablet trial accepted the RAM image and returned to Android
+without EFI diagnostic evidence. A later trial proved the rootless EFI
+chain, followed by the November 7 NixOS/GNOME test using an installed root
+under a RAM overlay. These are separate candidates and acceptance results;
+see the [tested configuration](status.md).
+
+See `vendor/tb322fc-linux/uefi/README.md` for provider builds and host
+interoperability testing. The candidate is always RAM-only, including when
+its byte count fits the boot partition. Do not pass it to the NBD helper:
+its rootless diagnostic serves evidence directly over USB and returns via
+a five-minute userspace timer. Review its exact image and test orchestration
+before a single serial-scoped `fastboot boot`.
 
 Only after the exact image and rootfs have been reviewed, use the existing
 serial-scoped Windows helper:

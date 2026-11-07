@@ -50,6 +50,8 @@ def main():
     parser.add_argument("--tools", type=Path, default=PROJECT / "result-efi-lab-tools")
     parser.add_argument("--busybox", type=Path, default=PROJECT / "result-busybox/bin/busybox")
     parser.add_argument("--gen-init-cpio", type=Path, default=PROJECT / "result-gen-init-cpio/bin/gen_init_cpio")
+    parser.add_argument("--readonly", action="store_true",
+                        help="test an immutable read-only root with a disposable RAM overlay")
     args = parser.parse_args()
     output = args.out.absolute()
     if output.exists():
@@ -63,7 +65,7 @@ def main():
     modules = tools / "kernel-modules"
     version = next((modules / "lib/modules").iterdir()).name
     needed = []
-    for name in ("virtio_mmio", "virtio_scsi", "sd_mod", "ext4"):
+    for name in ("virtio_mmio", "virtio_scsi", "sd_mod", "ext4", "overlay"):
         result = subprocess.check_output(
             ["modprobe", "-d", str(modules), "-S", version, "--show-depends", name],
             text=True)
@@ -84,6 +86,10 @@ def main():
         f"file /bin/busybox {busybox} 0755 0 0", "slink /bin/sh busybox 0755 0 0",
         f"file /init {wrapper} 0755 0 0", f"file /persistent-init {init} 0755 0 0",
     ]
+    if args.readonly:
+        marker = output / "y700-root-readonly"
+        marker.write_text("readonly-overlay\n")
+        listing.append(f"file /etc/y700-root-readonly {marker} 0444 0 0")
     for n, source in enumerate(needed):
         target = output / f"module-{n}.ko"
         target.write_bytes(lzma.decompress(source.read_bytes()) if source.suffix == ".xz"
@@ -108,8 +114,34 @@ def main():
     stage2.write_text("""#!/bin/sh
 BB=/bin/busybox
 fail() { echo "PERSIST_TEST_FAIL=$*"; $BB poweroff -f; while :; do $BB sleep 1; done; }
-test "$($BB stat -f -c %T /)" = ext2/ext3 || fail root-filesystem
-for device in /dev/sda2 /dev/sdb /dev/sdc /dev/sdd /dev/sde /dev/sdf; do
+root_device=
+for node in /sys/class/block/sd*; do
+    if $BB grep -qx 'PARTNAME=rootfs' "$node/uevent"; then
+        root_device=/dev/${node##*/}
+        root_parent=$($BB dirname "$($BB readlink -f "$node")")
+        root_parent=/dev/${root_parent##*/}
+    fi
+done
+test -n "$root_device" || fail root-device
+if test -f /run/y700-root/mode; then
+    test "$($BB cat /run/y700-root/mode)" = readonly-overlay || fail mode
+    $BB grep -Eq ' / overlay rw(,| )' /proc/mounts || fail overlay-root
+    test "$($BB stat -f -c %T /run/y700-root/lower)" = ext2/ext3 || fail lower-missing
+    test "$($BB stat -f -c %T /run/y700-root/overlay)" = tmpfs || fail upper-not-ram
+    $BB grep -Eq ' /run/y700-root/lower ext4 ro,([^ ]*,)?(noload|norecovery)(,| )' /proc/mounts ||
+        fail lower-mount-flags
+    for device in /dev/sd*; do
+        test "$($BB blockdev --getro "$device")" = 1 || fail storage-write-protection
+    done
+    if $BB dd if=/dev/zero of="$root_device" bs=4096 count=1 2>/dev/null; then
+        fail direct-root-write
+    fi
+    test ! -e /var/persistence-marker || fail overlay-write-leaked
+else
+    test "$($BB stat -f -c %T /)" = ext2/ext3 || fail root-filesystem
+fi
+for device in /dev/sd*; do
+    test "$device" != "$root_device" && test "$device" != "$root_parent" || continue
     test "$($BB blockdev --getro "$device")" = 1 || fail android-write-protection
 done
 if test -e /var/persistence-marker; then
@@ -117,6 +149,7 @@ if test -e /var/persistence-marker; then
     echo PERSIST_TEST_RETAINED
 else
     echo first-boot > /var/persistence-marker
+    test "$($BB cat /var/persistence-marker)" = first-boot || fail write-state
     echo PERSIST_TEST_CREATED
 fi
 $BB sync
@@ -134,6 +167,7 @@ while :; do $BB sleep 1; done
     root = disk_image(output, "data.img", "rootfs", fs)
     other = [disk_image(output, f"other-{i}.img", f"android-{i}") for i in range(5)]
     initial_hashes = {p.name: sha256(p) for p in other}
+    initial_root_hash = sha256(root)
     with root.open("rb") as stream:
         prefix = hashlib.sha256(stream.read(1 << 20)).hexdigest()
         stream.seek(33024 * 4096)
@@ -165,8 +199,11 @@ while :; do $BB sleep 1; done
         print(f"{label}: passed", flush=True)
 
     boot("first-boot", "PERSIST_TEST_CREATED", [root, *other])
-    boot("second-boot", "PERSIST_TEST_RETAINED", [root, *other])
+    boot("second-boot", "PERSIST_TEST_CREATED" if args.readonly else "PERSIST_TEST_RETAINED",
+         [root, *other])
     after_success = sha256(root)
+    if args.readonly and after_success != initial_root_hash:
+        raise RuntimeError("read-only overlay boot modified the root disk")
     duplicate = disk_image(output, "duplicate.img", "rootfs", fs)
     duplicate_hash = sha256(duplicate)
     boot("duplicate-rejected", "Rootfs handoff failed: ambiguous rootfs partition",
@@ -206,9 +243,15 @@ while :; do $BB sleep 1; done
             target.write(source.read(1 << 20))
     run("e2fsck", "-fn", output / "rootfs-after.ext4")
     metadata = dict(scope="QEMU only; not TB322FC/UFS/NixOS hardware acceptance",
+                    mode="readonly-overlay" if args.readonly else "persistent",
                     tests=records, init_sha256=sha256(init), kernel_sha256=sha256(kernel),
                     busybox_sha256=sha256(busybox), gen_init_cpio_sha256=sha256(gen_cpio),
                     initramfs_sha256=sha256(cpio), android_sentinels_unchanged=True)
+    if args.readonly:
+        if sha256(root) != initial_root_hash:
+            raise RuntimeError("read-only test changed the root disk")
+        metadata["all_disks_unchanged"] = True
+        metadata["initial_disk_hashes"] = {root.name: initial_root_hash, **initial_hashes}
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
 

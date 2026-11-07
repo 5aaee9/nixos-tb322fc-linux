@@ -1,0 +1,232 @@
+diff --git a/vendor/kshim/src/core/linux_inplace.c b/vendor/kshim/src/core/linux_inplace.c
+--- a/vendor/kshim/src/core/linux_inplace.c
++++ b/vendor/kshim/src/core/linux_inplace.c
+@@ -21,21 +21,46 @@
+     return a.base < b.base + b.size && b.base < a.base + a.size;
+ }
+ 
++static bool reservations_survive_capture(const void *fdt)
++{
++    int parent = fdt_path_offset(fdt, "/reserved-memory");
++    if (parent == -FDT_ERR_NOTFOUND)
++        return true;
++    if (parent < 0)
++        return false;
++    int node;
++    fdt_for_each_subnode(node, fdt, parent) {
++        int size;
++        const void *reg = fdt_getprop(fdt, node, "reg", &size);
++        if (!reg && size != -FDT_ERR_NOTFOUND)
++            return false;
++        /* The upstream snapshot omits unavailable nodes, including parents. */
++        if (reg && size > 0 && !dt_available(fdt, node))
++            return false;
++    }
++    return node == -FDT_ERR_NOTFOUND;
++}
++
+ int kshim_linux_inplace_check(const struct kshim_linux_inplace *c)
+ {
+-    if (!c || !c->entries || c->count != 3 || !c->image || !c->fdt ||
++    if (!c || !c->entries || c->count != (c->uefi ? 4 : 3) || !c->image || !c->fdt ||
+         !c->entries[0] || !c->entries[1] || !c->entries[2] ||
+         !c->payload_size || c->payload_size >= c->packed_size ||
+         c->packed_size > UINT64_C(0x8000000) ||
+         c->packed_base > UINT64_MAX - c->packed_size)
+         return -1;
+     const MANIFEST_ENTRY *android = c->entries[0], *target = c->entries[1];
+-    const MANIFEST_ENTRY *shim = c->entries[2];
++    for (unsigned i = 0; i < c->count; ++i)
++        if (!c->entries[i])
++            return -1;
++    const MANIFEST_ENTRY *shim = c->entries[c->count - 1];
+     if (android->offset || android->type != MF_ENTRY_TYPE_LINUX ||
+         android->flags != (MF_ENTRY_FLAG_BASE_IMAGE | MF_ENTRY_FLAG_EXECUTABLE) ||
+-        target->type != MF_ENTRY_TYPE_LINUX || target->flags != MF_ENTRY_FLAG_EXECUTABLE ||
++        target->type != MF_ENTRY_TYPE_LINUX ||
++        target->flags != (MF_ENTRY_FLAG_EXECUTABLE |
++                         (c->uefi ? MF_ENTRY_FLAG_HAS_DEVICE_TREE_BLOB : 0)) ||
+         target->entry_offset || target->load_address || target->copy_size_max ||
+-        target->device_tree_blob_entry || target->alignment != 21 ||
++        target->device_tree_blob_entry != (c->uefi ? 2 : 0) || target->alignment != 21 ||
+         shim->type != MF_ENTRY_TYPE_SHIM || shim->flags != MF_ENTRY_FLAG_EXECUTABLE)
+         return -2;
+     for (unsigned i = 0; i < c->count; ++i) {
+@@ -49,19 +74,36 @@
+         le64(header + 8) != 0 || le64(header + 24) != 0xa ||
+         le64(header + 16) < 64 || c->android_image_size < 64)
+         return -3;
+-    struct dt_range ranges[] = {
++    struct dt_range ranges[4] = {
+         {c->packed_base, c->android_image_size > android->size ?
+                         c->android_image_size : android->size},
+         {c->packed_base + target->offset, le64(header + 16) > target->size ?
+                                         le64(header + 16) : target->size},
+         {c->packed_base + shim->offset, shim->size},
+     };
++    unsigned range_count = 3;
++    if (c->uefi) {
++        const MANIFEST_ENTRY *dtb = c->entries[2];
++        if (dtb->type != MF_ENTRY_TYPE_DTB || dtb->flags ||
++            dtb->entry_offset || dtb->load_address || dtb->copy_size_max ||
++            dtb->device_tree_blob_entry || dtb->alignment != 3 ||
++            dtb->size > 0x80000 || !c->payload_fdt ||
++            dt_validate(c->payload_fdt, dtb->size) ||
++            fdt_node_check_compatible(c->payload_fdt, 0, "lenovo,elden"))
++            return -8;
++        int chosen = fdt_path_offset(c->payload_fdt, "/chosen");
++        const char *contract = dt_string(c->payload_fdt, chosen, "y700,ram-uefi-template");
++        if (!contract || strcmp(contract, "v1"))
++            return -8;
++        ranges[3] = (struct dt_range){c->packed_base + dtb->offset, dtb->size};
++        range_count++;
++    }
+     if ((ranges[1].base & (UINT64_C(0x200000) - 1)) ||
+         !valid_range(c->runtime) ||
+         !dt_contains(ranges[2], c->runtime.base, c->runtime.size))
+         return -4;
+     struct dt_range payload = {c->packed_base, c->payload_size};
+-    for (unsigned i = 0; i < 3; ++i) {
++    for (unsigned i = 0; i < range_count; ++i) {
+         if (!valid_range(ranges[i]) ||
+             !dt_contains(payload, ranges[i].base, ranges[i].size))
+             return -4;
+@@ -77,6 +119,8 @@
+     if (!valid_range(fdt_range) || fdt_range.size > UINT64_C(0x200000) ||
+         dt_validate(c->fdt, fdt_range.size) || overlap(fdt_range, packed))
+         return -5;
++    if (c->uefi && !reservations_survive_capture(c->fdt))
++        return -9;
+ 
+     bool in_ram = false;
+     int node;
+diff --git a/vendor/kshim/src/core/main.c b/vendor/kshim/src/core/main.c
+--- a/vendor/kshim/src/core/main.c
++++ b/vendor/kshim/src/core/main.c
+@@ -861,10 +861,15 @@
+                                                &device_info);
+         kshim_boot_metrics_record_once(KSHIM_BOOT_STAGE_HANDOFF);
+         const MANIFEST_ENTRY *entry = view.entries[selected_index];
++        const char uefi_name[] = "UEFI (RAM)";
++        const bool uefi_entry =
++            entry->type == MF_ENTRY_TYPE_LINUX &&
++            entry->name_len == sizeof(uefi_name) - 1 &&
++            !memcmp(entry->name, uefi_name, sizeof(uefi_name) - 1);
+         int linux_inplace_status = 0;
+         if (entry->type == MF_ENTRY_TYPE_LINUX &&
+-            !(entry->flags & (MF_ENTRY_FLAG_BASE_IMAGE | MF_ENTRY_FLAG_COPY |
+-                              MF_ENTRY_FLAG_HAS_DEVICE_TREE_BLOB))) {
++            !(entry->flags & (MF_ENTRY_FLAG_BASE_IMAGE | MF_ENTRY_FLAG_COPY)) &&
++            (uefi_entry || !(entry->flags & MF_ENTRY_FLAG_HAS_DEVICE_TREE_BLOB))) {
+             const struct kshim_linux_inplace context = {
+                 .entries = view.entries, .count = view.manifest->header.entry_count,
+                 .image = (const void *)(uintptr_t)(linux_base + entry->offset),
+@@ -877,6 +882,10 @@
+                     (uint64_t)(__runtime_end_address__ - __image_start_address__),
+                 },
+                 .fdt = runtime_fdt,
++                .uefi = uefi_entry,
++                .payload_fdt = uefi_entry && view.manifest->header.entry_count == 4
++                    ? (const void *)(uintptr_t)(linux_base + view.entries[2]->offset)
++                    : NULL,
+             };
+             linux_inplace_status = kshim_linux_inplace_check(&context);
+             if (linux_inplace_status) {
+@@ -988,6 +997,18 @@
+                                                    r && r->splash_status == 0
+                                                        ? &r->framebuffer
+                                                        : NULL);
++                    }
++                    if (status == 0) {
++                        if (uefi_entry) {
++                            int chosen = fdt_path_offset(blob, "/chosen");
++                            fdt64_t packed_range[] = {
++                                cpu_to_fdt64(linux_base),
++                                cpu_to_fdt64(manifest_address + manifest_size - linux_base),
++                            };
++                            handoff_stage = "uefi-range";
++                            status = fdt_setprop(blob, chosen, "y700,uefi-packed-range",
++                                                 packed_range, sizeof(packed_range));
++                        }
+                     }
+                     if (status == 0) {
+                         /* Re-pack the modified DT, then validate the result. */
+diff --git a/vendor/kshim/src/include/linux_inplace.h b/vendor/kshim/src/include/linux_inplace.h
+--- a/vendor/kshim/src/include/linux_inplace.h
++++ b/vendor/kshim/src/include/linux_inplace.h
+@@ -12,5 +12,8 @@
+     uint64_t packed_base, packed_size, payload_size, android_image_size;
+     struct dt_range runtime;
+     const void *fdt;
++    /* Separate four-entry RAM UEFI contract, with a measured board DT. */
++    bool uefi;
++    const void *payload_fdt;
+ };
+ int kshim_linux_inplace_check(const struct kshim_linux_inplace *context);
+diff --git a/vendor/kshim/tests/linux_inplace_test.c b/vendor/kshim/tests/linux_inplace_test.c
+--- a/vendor/kshim/tests/linux_inplace_test.c
++++ b/vendor/kshim/tests/linux_inplace_test.c
+@@ -4,7 +4,7 @@
+ #include <stdio.h>
+ #include <string.h>
+ 
+-static uint64_t tree[1024], snapshot[1024];
++static uint64_t tree[1024], snapshot[1024], template[512];
+ static unsigned char header[64];
+ static MANIFEST_ENTRY android, linux_entry, shim;
+ static const MANIFEST_ENTRY *entries[] = {&android, &linux_entry, &shim};
+@@ -89,5 +89,54 @@
+     assert(!fdt_setprop(tree, node, "reg", reg, sizeof(reg)));
+     assert(!fdt_setprop_empty(tree, node, "no-map"));
+     check(-7);
++    reset();
++    assert(!fdt_create_empty_tree(template, sizeof(template)));
++    assert(!fdt_setprop_string(template, 0, "compatible", "lenovo,elden"));
++    int chosen = fdt_add_subnode(template, 0, "chosen");
++    assert(chosen >= 0);
++    assert(!fdt_setprop_string(template, chosen, "y700,ram-uefi-template", "v1"));
++    MANIFEST_ENTRY dtb = {
++        .offset=0x620000, .size=sizeof(template), .type=MF_ENTRY_TYPE_DTB, .alignment=3,
++    };
++    const MANIFEST_ENTRY *uefi_entries[] = {&android, &linux_entry, &dtb, &shim};
++    context.entries = uefi_entries;
++    context.count = 4;
++    context.uefi = true;
++    context.payload_fdt = template;
++    context.payload_size = 0x621000;
++    context.packed_size = 0x621100;
++    linux_entry.flags |= MF_ENTRY_FLAG_HAS_DEVICE_TREE_BLOB;
++    linux_entry.device_tree_blob_entry = 2;
++    check(0);
++    context.uefi = false; check(-1); context.uefi = true;
++    context.payload_fdt = NULL; check(-8); context.payload_fdt = template;
++    dtb.offset = 0x610000; check(-4); dtb.offset = 0x620000;
++    dtb.flags = MF_ENTRY_FLAG_COPY; check(-8); dtb.flags = 0;
++    linux_entry.device_tree_blob_entry = 3; check(-2); linux_entry.device_tree_blob_entry = 2;
++    assert(!fdt_delprop(template, chosen, "y700,ram-uefi-template")); check(-8);
++    assert(!fdt_setprop_string(template, chosen, "y700,ram-uefi-template", "v1"));
++    reserved = fdt_add_subnode(tree, 0, "reserved-memory");
++    assert(reserved >= 0);
++    assert(!fdt_setprop_u32(tree, reserved, "#address-cells", 2));
++    assert(!fdt_setprop_u32(tree, reserved, "#size-cells", 2));
++    assert(!fdt_setprop_empty(tree, reserved, "ranges"));
++    node = fdt_add_subnode(tree, reserved, "firmware@88000000");
++    assert(node >= 0);
++    reg[0] = cpu_to_fdt64(0x88000000); reg[1] = cpu_to_fdt64(0x1000);
++    assert(!fdt_setprop(tree, node, "reg", reg, sizeof(reg)));
++    check(0);
++    assert(!fdt_setprop_string(tree, node, "status", "disabled"));
++    check(-9); /* Capture would silently drop a concrete reservation. */
++    assert(!fdt_setprop_string(tree, node, "status", "okay"));
++    assert(!fdt_setprop_string(tree, reserved, "status", "disabled"));
++    check(-9); /* An unavailable ancestor drops the child too. */
++    assert(!fdt_setprop_string(tree, reserved, "status", "okay"));
++    node = fdt_path_offset(tree, "/reserved-memory/firmware@88000000");
++    assert(node >= 0);
++    assert(!fdt_setprop(tree, node, "status", "bad", 3));
++    check(-9); /* Malformed availability is not an allocation license. */
++    assert(!fdt_setprop_string(tree, node, "status", "disabled"));
++    assert(!fdt_delprop(tree, node, "reg"));
++    check(0); /* Disabled dynamic nodes have no allocated extent. */
+     puts("Linux physical placement, BSS, DT and firmware reservations passed");
+ }

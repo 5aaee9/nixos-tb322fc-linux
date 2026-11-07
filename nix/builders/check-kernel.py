@@ -18,7 +18,10 @@ if mode == "efi":
         if disabled in config:
             raise ValueError("EFI kernel must not contain " + disabled)
 else:
-    required.add("CONFIG_CMDLINE_FORCE=y")
+    required.update({"CONFIG_CMDLINE_FORCE=y", "CONFIG_BUILTIN_DTB=y",
+                     'CONFIG_BUILTIN_DTB_NAME="qcom/sm8750-lenovo-elden"'})
+if mode == "readonly":
+    required.update({"CONFIG_OVERLAY_FS=y", "CONFIG_TMPFS=y", "CONFIG_TMPFS_XATTR=y"})
 required.add("CONFIG_BLK_DEV_NBD=y" if mode == "usb-nbd" else "# CONFIG_BLK_DEV_NBD is not set")
 missing = required - config
 if missing:

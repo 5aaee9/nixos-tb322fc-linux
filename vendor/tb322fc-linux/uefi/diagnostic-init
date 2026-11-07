@@ -1,0 +1,71 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Rootless EFI-chain evidence. No physical filesystem is ever mounted.
+export PATH=/bin:/sbin
+BB=/bin/busybox
+fail() {
+    echo "Y700_EFI_TARGET_FAIL=$*" >/dev/console
+    "$BB" sleep 15
+    "$BB" reboot -f -n
+    while :; do "$BB" sleep 3600; done
+}
+"$BB" mount -t proc proc /proc || fail proc
+"$BB" mount -t sysfs sysfs /sys || fail sysfs
+"$BB" mount -t devtmpfs devtmpfs /dev || fail devtmpfs
+"$BB" mount -t tmpfs -o mode=0700,nosuid,nodev tmpfs /run || fail tmpfs
+exec >/dev/console 2>&1
+# This deadline is userspace recovery, not a hard-lock watchdog.
+("$BB" sleep 300; "$BB" reboot -f -n) &
+"$BB" mkdir -p /run/evidence
+[ "$("$BB" cat /sys/firmware/efi/fw_platform_size)" = 64 ] || fail efi-platform
+"$BB" mount -t efivarfs -o ro efivarfs /sys/firmware/efi/efivars || fail efivarfs
+guid=4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+loader=$("$BB" dd if="/sys/firmware/efi/efivars/LoaderInfo-$guid" bs=1 skip=4 2>/dev/null |
+    "$BB" tr -d '\000')
+entry=$("$BB" dd if="/sys/firmware/efi/efivars/LoaderEntrySelected-$guid" bs=1 skip=4 2>/dev/null |
+    "$BB" tr -d '\000')
+case "$loader" in systemd-boot*) ;; *) fail loader ;; esac
+[ "$entry" = y700-efi-diag.conf ] || fail entry
+case " $("$BB" cat /proc/cmdline) " in
+    *" y700.efi-diag=v1 "*) ;;
+    *) fail command-line ;;
+esac
+[ "$("$BB" tr -d '\000' </proc/device-tree/chosen/y700,uefi-provider)" = ram-v1 ] ||
+    fail provider-marker
+complete=0
+for attempt in $("$BB" seq 1 60); do
+    complete=1
+    for disk in sda sdb sdc sdd sde sdf; do
+        [ -b "/dev/$disk" ] || complete=0
+    done
+    [ "$complete" = 0 ] || break
+    "$BB" sleep 1
+done
+[ "$complete" = 1 ] || fail ufs-enumeration
+for node in /sys/class/block/sd*; do
+    device=/dev/${node##*/}
+    [ -b "$device" ] || fail block-node
+    "$BB" blockdev --setro "$device" || fail block-protection
+    [ "$("$BB" blockdev --getro "$device")" = 1 ] || fail block-protection-check
+done
+{
+    echo "Y700_EFI_TARGET_PASS=v1"
+    echo "provider=ram-v1"
+    echo "loader=$loader"
+    echo "entry=$entry"
+    echo "initrd=rootless-v1"
+    "$BB" uname -a
+    "$BB" cat /proc/cmdline
+    "$BB" cat /proc/sys/kernel/random/boot_id
+    "$BB" cat /proc/mounts
+    for node in /sys/class/block/sd*; do
+        echo "${node##*/} readonly=$("$BB" blockdev --getro "/dev/${node##*/}")"
+    done
+} > /run/evidence/evidence.txt
+"$BB" dmesg > /run/evidence/dmesg.txt
+"$BB" cp /sys/firmware/fdt /run/evidence/handoff.dtb || fail save-fdt
+. /etc/usb-rndis
+printf 'A:192.168.42.1\nD:*\n' > /run/httpd.conf
+"$BB" httpd -p 192.168.42.2:8080 -h /run/evidence -c /run/httpd.conf || fail httpd
+echo "Y700_EFI_TARGET_PASS=v1; RAM evidence available for five minutes"
+while :; do "$BB" sleep 1; done

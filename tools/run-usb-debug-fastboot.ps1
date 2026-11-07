@@ -127,6 +127,7 @@ try {
     New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $bindAddress `
         -PrefixLength 24 -AddressFamily IPv4 -PolicyStore ActiveStore | Out-Null
     $addedAddress = $true
+    Wait-GadgetIPv4Address $adapter $bindAddress
     Assert-GadgetRoute $adapter "192.168.42.2"
     @{
         interface_guid = $adapter.InterfaceGuid.ToString()

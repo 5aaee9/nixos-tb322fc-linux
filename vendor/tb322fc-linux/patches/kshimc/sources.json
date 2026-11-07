@@ -24,6 +24,22 @@
     {
       "file": "0001-tb322fc-menu-diagnostic.patch",
       "sha256": "799d64ed168b2ffd76be39a3a8f65d299c8ec1e65b1d76f006547621f62b1fc5"
+    },
+    {
+      "file": "0002-clean-incoming-fdt-at-handoff.patch",
+      "sha256": "716cfa2c3ebac306429e459dd014335e8fc9a243ac0652f8f07cca77c168955f"
+    },
+    {
+      "file": "0003-validate-inplace-linux-handoff.patch",
+      "sha256": "7eaf6f3271566a97c7e99f8a841c3da27349575c30d23325b979b1e7631722a0"
+    },
+    {
+      "file": "0004-ram-uefi-handoff.patch",
+      "sha256": "387bbf9dc2326ad53a1ff8bc888ea3e82156e8c936b8e093cd3c4786ce4b3921"
+    },
+    {
+      "file": "0005-uefi-stage-markers.patch",
+      "sha256": "eda9bf9175b176949f4d6de89d2160eb7ea85c29148d7c76c505792134da1c1f"
     }
   ]
 }

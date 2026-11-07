@@ -11,13 +11,51 @@ stock early firmware -> OpenABL
                                `-> selected kernel + initrd + DTB + NixOS system
 ```
 
-The complete EFI chain remains an offline development workflow. A separate
+The complete OpenABL/NixOS chain remains an offline development workflow. A separate
 diagnostic ABL was written and read-verified on the tablet, but its boot
 failed with a reported crashdump and boot loop. Original ABL restoration
 and stock Android return passed on November 3, 2026, after EDL V2 cable
-entry. The accepted persistent Linux route remains `fastboot boot` through
-stock ABL; Linux was not booted again during this recovery. See the
+entry. At that stage the accepted Linux route was `fastboot boot` through
+stock ABL; Linux was not booted again during that recovery. See the
 [persistent-root guide](persistent-rootfs.md).
+
+The alternative stock-ABL route has passed a bounded tablet test on
+November 6, 2026:
+
+```text
+stock ABL -> fastboot boot -> kShimC -> RAM U-Boot EFI
+          -> systemd-boot 260.5 -> board Linux -> RAM diagnostic userspace
+```
+
+The target supplied EFI/runtime evidence over USB, kept all UFS nodes
+read-only and mounted no physical filesystem. Its timer returned to stock
+Android; host cleanup passed. This is rootless boot-chain acceptance, not
+full NixOS/GNOME or an installed boot menu. The normal kShimC build still
+defaults to Android; the attended test used a separately verified
+default-only autostart derivative.
+
+On November 7 the same stock-ABL route also booted the installed NixOS
+generation 2 through systemd-boot, with Linux 7.2.0-y700-efi and GNOME 50.5.
+GDM starts on boot; a temporary RAM-only login verified the Wayland user
+desktop and restored its original configuration. This follows an authorized
+repair and full on-device consistency check of the Linux rootfs. The EFI
+trial itself uses ro,norecovery beneath a 2 GiB RAM overlay, with all UFS
+nodes read-only. The final session no longer depends on NBD. See the
+[tested configuration](status.md) for the exact image and acceptance limits.
+That trial used a RAM-loaded provider with embedded EFI media and did not
+install a permanent menu.
+
+The later November 7 installation converted the existing 255 GiB root to
+Btrfs, preserved the original files and rollback data, and installed the
+separate Android-preserving menu in `boot_a`. Normal startup now reaches
+systemd-boot generation 3 and an automatically logged-in GNOME Wayland
+desktop with a writable root. Original ABLs, inactive boot, ESP and GPT
+hashes remain unchanged. The installed menu defaults to Linux after ten
+seconds and retains Android. See [Btrfs and the installed menu](btrfs.md).
+
+This installed route still embeds EFI files in boot.img. It does not
+implement disk ESP discovery, persistent EFI variables, physical key input
+in systemd-boot or independent kernel/initrd generation updates.
 
 ## Diagnostic trial and restoration
 
@@ -46,6 +84,26 @@ readbacks and Android return, but cannot establish retroactive pre-action
 integrity. The recovery automation requires corrected manifest coverage
 and review before reuse. This remains an experiment, not an OpenABL
 installation procedure.
+
+## November 4 fastboot write-policy test
+
+At the owner's request, one independently reviewed fastboot attempt used
+the same 1 MiB entry-probe image on `abl_a`. The planned successful-write
+branch restored own-stock ABL in the same running fastboot session before
+any reboot. No candidate boot or critical-unlock request was part of this
+test.
+
+The tablet reported `unlocked: yes`, `secure: yes` and
+`Device critical unlocked: false`. Sending 1024 KB returned OKAY; Writing
+returned `FAILED (remote: 'Flashing is not allowed for Critical Partitions')`.
+The candidate flash was rejected, so the stock-restoration branch was not
+used. One normal reboot returned to completed Android `.229`, slot a,
+with matching identity/USB location and a changed boot ID.
+
+No EDL, other partition, erase or active-slot command was sent. No readback
+or OpenABL boot is claimed. This verifies the installed stock-fastboot
+write-policy boundary; it does not test XBL authentication or establish a
+usable OpenABL installation.
 
 ## What the upstream signed filename means
 
@@ -80,6 +138,40 @@ deliberately generates a placeholder signature, as its
 [README explains](https://github.com/msm8916-mainline/qtestsign/blob/f3df53a5f0e37ccee076541f30f9d5b8340fc2d3/README.md).
 Changing to this official release would retain the measured signature and
 root mismatch. The release was inspected offline only.
+
+### November 4 upstream recheck
+
+The latest official release is still v1.2, with the same SM8750 asset digest.
+Current main is now
+[`2494196980170e2d57b9d2a7db30b88740643f58`](https://github.com/OpenHandheldCollective/OpenABL/tree/2494196980170e2d57b9d2a7db30b88740643f58).
+Its seven commits after this project's pin reorganize settings and developer
+options, including display-handoff options. The signing command and
+dependency pins are unchanged. This does not establish a new authentication
+route for the tablet.
+
+The open [firmware updater PR #50](https://github.com/OpenHandheldCollective/OpenABL/pull/50)
+adds an MBN compatibility check; it is not an OEM signer. We compiled its
+unchanged parser at `f500aa03a40432bdfb5284d826f2dac382c3d9f5` in the
+project's pinned Nix shell and ran it against the preserved images.
+The official and failed candidates pass segment-digest checks but report
+`signature` mismatch against stock (256-byte versus 104-byte fields).
+A signature-only in-memory corruption of stock still passes that parser
+and comparison, while payload corruption is rejected. These results
+exercise the parser, not the full proposed updater or firmware acceptance.
+
+The [current menu entry](https://github.com/OpenHandheldCollective/OpenABL/blob/2494196980170e2d57b9d2a7db30b88740643f58/Menu/Main.c#L1026)
+requires the OpenABL MenuHost protocol and returns `EFI_NOT_FOUND` without
+it. It also uses the ABL library protocol for libfdt/inflate operations.
+Its DT fixup code assumes XBL already reserves the required memory.
+Consequently, placing `openabl-menu.efi` on our RAM EFI filesystem is not
+a complete integration. Menu/input ideas remain useful references, but
+the stock-ABL/kShimC route still needs its own EFI provider and target
+handoff validation.
+
+The [current settings setup](https://github.com/OpenHandheldCollective/OpenABL/blob/2494196980170e2d57b9d2a7db30b88740643f58/Core/Settings.c#L702)
+still writes a new store to the final 4 KiB of `misc` when necessary.
+The normal menu therefore remains unsuitable for an unmodified no-write
+trial. No new image was built or sent to the tablet during this recheck.
 
 ## Authentication and recovery limits
 
@@ -122,9 +214,9 @@ logs was denied; an empty collection does not establish their absence.
 
 A supported persistent replacement still lacks a target-proven signing
 route. The entry-probe experiment failed to demonstrate execution.
-A RAM EFI provider behind
-stock ABL remains the alternate path for the standard EFI-chain goal.
-No such provider is yet accepted on this tablet.
+The RAM EFI provider behind stock ABL supplies the working standard
+EFI-chain route described above. Its acceptance does not establish
+replacement-ABL authentication.
 
 OpenABL's later EFI Security/Security2 accept-all callbacks are a separate
 trust boundary. They cannot make XBL accept OpenABL itself. Android image

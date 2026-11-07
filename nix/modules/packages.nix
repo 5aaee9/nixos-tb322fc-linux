@@ -22,6 +22,14 @@
         inherit pkgs;
         project = deviceProject;
       };
+      diagnostics = import ../packages/diagnostics.nix {
+        inherit pkgs;
+        project = sourceFor [
+          "tools/readonly-runner.c"
+          "tools/readonly-range-reader.c"
+          "tests/readonly_runner_child.c"
+        ];
+      };
       boot = import ../packages/boot.nix {
         inherit pkgs inputs;
         inherit (device) firmware;
@@ -37,8 +45,12 @@
       kshim = import ../packages/kshimc.nix {
         inherit pkgs inputs;
         inherit (device) stockBoot;
+        linuxKernel = boot.kernels.readonly;
+        uefiProvider = uefi.target;
+        uefiDtb = uefi.targetDtb;
         project = sourceFor [
           "vendor/tb322fc-linux/patches/kshimc"
+          "vendor/tb322fc-linux/diagnostics"
           "tools/kshimc_config.py"
           "tools/kshimc_image.py"
           "nix/builders/check-kshimc.py"
@@ -83,6 +95,27 @@
           "nix/builders/openabl-metadata.py"
         ];
       };
+      uefi = import ../packages/uefi.nix {
+        inherit pkgs inputs boot;
+        project = sourceFor [
+          "vendor/tb322fc-linux/uefi"
+          "vendor/tb322fc-linux/diagnostics"
+          "nix/builders/prepare-uefi.py"
+          "nix/builders/prepare-uefi-dtb.py"
+          "nix/builders/check-uefi.py"
+          "tools/build-uefi-ramfs.py"
+          "tools/build-efi-generation.py"
+          "tools/build-efi-esp.py"
+          "vendor/tb322fc-linux/configs"
+          "vendor/tb322fc-linux/sources.json"
+          "vendor/tb322fc-linux/firmware-tb322fc-prc.json"
+          "vendor/tb322fc-linux/initramfs/init"
+          "flake.lock"
+          "tools/test-efi-chain.py"
+          "tests/uefi_memory_test.c"
+          "tests/boot_stage_test.c"
+        ];
+      };
     in
     {
       _module.args.y700 = {
@@ -91,12 +124,18 @@
           kshim
           rootfs
           efi
+          uefi
+          diagnostics
           ;
       };
       legacyPackages.y700 = {
         inherit (efi) mkGeneration mkEsp;
+        inherit (uefi) mkProvider mkNixosMedia mkNixosMediaWith;
+        inherit (kshim) mkUefiImage;
       };
       packages = {
+        readonly-runner = diagnostics.runner;
+        readonly-range-reader = diagnostics.reader;
         default = boot.boot-persistent;
         audio-topology =
           pkgs.runCommand "y700-audio-topology"
@@ -120,21 +159,39 @@
         busybox = boot.busybox;
         gen-init-cpio = boot.genInitCpio;
         kernel-persistent = boot.kernels.persistent;
+        kernel-readonly = boot.kernels.readonly;
         kernel-usb-nbd = boot.kernels.usb-nbd;
         kernel-efi = boot.kernels.efi;
         initramfs-persistent = boot.initramfs.persistent;
+        initramfs-readonly = boot.initramfs.readonly;
         initramfs-usb-nbd = boot.initramfs.usb-nbd;
         boot-persistent = boot.boot-persistent;
+        boot-readonly = boot.boot-readonly;
         boot-usb-nbd = boot.boot-usb-nbd;
         kshimc-packer = kshim.packer;
         kshimc-runtime = kshim.runtime;
         boot-kshimc = kshim.image;
+        boot-kshimc-linux-ram = kshim.imageLinux;
+        boot-kshimc-uefi-ram = kshim.imageUefi;
+        boot-kshimc-uefi-persistent = kshim.mkUefiImage {
+          provider = uefi.mkProvider {
+            media = uefi.mkNixosMediaWith {
+              generation = efi.generation;
+              persistent = true;
+            };
+          };
+          installable = true;
+        };
         rootfs = rootfs.images.persistent;
         rootfs-base = rootfs.images.base;
         rootfs-desktop = rootfs.images.desktop;
         rootfs-archive = rootfs.archives.persistent;
         efi-generation = efi.generation;
         efi-esp = efi.esp;
+        uefi-lab-a = uefi.labA;
+        uefi-lab-b = uefi.labB;
+        uefi-target = uefi.target;
+        uefi-target-dtb = uefi.targetDtb;
         efi-lab-tools = import ../packages/lab-tools.nix {
           inherit pkgs;
           arm = import inputs.nixpkgs { system = "aarch64-linux"; };

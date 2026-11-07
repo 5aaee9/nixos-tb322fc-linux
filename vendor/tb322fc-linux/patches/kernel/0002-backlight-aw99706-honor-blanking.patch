@@ -1,0 +1,35 @@
+From d5734822fcd7cbb90943158e1b281afca4c41325 Mon Sep 17 00:00:00 2001
+From: Indexyz <7685264+5aaee9@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 00:41:56 -0800
+Subject: [PATCH] backlight: aw99706: honor blanking and power state
+
+Use backlight_get_brightness() in the update_status callback so the
+backlight core power, framebuffer blank and suspend states take effect.
+The requested brightness is retained during blanking; using that raw
+value leaves the LED output enabled after backlight_disable().
+
+The existing hardware update already writes zero brightness and clears
+the backlight enable bit when passed zero. The core helper also restores
+the saved requested brightness on unblank without a userspace workaround.
+
+Co-Authored-By: Codex <noreply@openai.com>
+---
+ drivers/video/backlight/aw99706.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/video/backlight/aw99706.c b/drivers/video/backlight/aw99706.c
+index 2038ce98c5495ed83de4a36c5e4c98466432cc46..b76afb60b8f0be438dbb73cc4ccd162138d2c38e 100644
+--- a/drivers/video/backlight/aw99706.c
++++ b/drivers/video/backlight/aw99706.c
+@@ -335,7 +335,7 @@ static int aw99706_bl_update_status(struct backlight_device *bl)
+ {
+ 	struct aw99706_device *aw = bl_get_data(bl);
+ 
+-	return aw99706_update_brightness(aw, bl->props.brightness);
++	return aw99706_update_brightness(aw, backlight_get_brightness(bl));
+ }
+ 
+ static const struct backlight_ops aw99706_bl_ops = {
+-- 
+2.53.0
+

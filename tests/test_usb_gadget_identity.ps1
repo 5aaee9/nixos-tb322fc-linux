@@ -52,4 +52,33 @@ $script:routeIndex = 17
 Assert-GadgetRoute $adapter "192.168.42.2"
 $script:routeIndex = 18
 Expect-Refusal { Assert-GadgetRoute $adapter "192.168.42.2" }
-Write-Output "PowerShell parsing and six USB identity/route cases passed; no device queries ran."
+
+function Get-NetIPAddress {
+    param($InterfaceIndex, $AddressFamily, $PolicyStore, $ErrorAction)
+    if ($InterfaceIndex -ne 17 -or $AddressFamily -ne "IPv4" -or $PolicyStore -ne "ActiveStore") {
+        throw "Address query escaped the verified gadget."
+    }
+    $stateIndex = [Math]::Min($script:addressQueries, $script:addressStates.Count - 1)
+    $script:addressQueries++
+    if ($script:addressStates[$stateIndex] -eq "Missing") { return @() }
+    return [pscustomobject]@{
+        IPAddress = "192.168.42.1"
+        PrefixLength = $script:addressPrefix
+        AddressState = $script:addressStates[$stateIndex]
+    }
+}
+$script:addressPrefix = 24
+$script:addressStates = @("Tentative", "Tentative", "Preferred")
+$script:addressQueries = 0
+Wait-GadgetIPv4Address $adapter "192.168.42.1" 2000
+if ($script:addressQueries -ne 3) { throw "Readiness did not wait for Preferred." }
+foreach ($state in @("Duplicate", "Invalid", "Missing", "Tentative")) {
+    $script:addressStates = @($state)
+    $script:addressQueries = 0
+    Expect-Refusal { Wait-GadgetIPv4Address $adapter "192.168.42.1" 1 }
+}
+$script:addressStates = @("Preferred")
+$script:addressQueries = 0
+$script:addressPrefix = 16
+Expect-Refusal { Wait-GadgetIPv4Address $adapter "192.168.42.1" }
+Write-Output "PowerShell parsing, six USB identity/route and six address readiness cases passed; no device queries ran."

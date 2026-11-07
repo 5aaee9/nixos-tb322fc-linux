@@ -7,14 +7,18 @@ follow the [complete installation guide](install.md). Android's installed
 boot chain and recovery are retained. The combined installer is offline
 tested and still needs a fresh end-to-end hardware acceptance.
 
-The first local-root configuration continues to load its kernel through
-`fastboot boot`. Once running, it uses an ext4 partition labelled `rootfs`
-without NBD or a RAM overlay. This does not provide autonomous Linux startup
-or a full EFI boot manager. OpenABL/systemd-boot is a separate integration.
+Current persistent builds use Btrfs on the partition labelled `rootfs`,
+without NBD or a RAM overlay. The direct local-root image loads through
+`fastboot boot`. A separate Android-preserving installed menu chains
+kShimC, a RAM UEFI provider and systemd-boot; see the
+[Btrfs and installed-menu guide](btrfs.md) for its build and migration
+boundaries. The provider's EFI files remain embedded in boot.img, so it
+does not yet support independent disk-ESP generation updates.
 
-On the development tablet, an explicitly authorized Android reset and
-256 GiB allocation have passed installation, two internal-root boots and
-an Android/Linux round trip: 1 GiB future ESP and 255 GiB rootfs. The same
+The original ext4 installation on the development tablet followed an
+explicitly authorized Android reset and 256 GiB allocation: 1 GiB future
+ESP and 255 GiB rootfs. Two internal-root boots and an Android/Linux round
+trip passed. The same
 boot image loaded a second compatible NixOS userspace generation while a
 password and test file persisted. This is target-device acceptance of the
 local-root handoff; it is not an unattended public installer or full
@@ -32,7 +36,8 @@ python3 tools/storage-layout.py /private/data-lun-gpt.json \
 ```
 
 The proposal reserves 1 GiB of the selected Linux budget for a future FAT
-ESP (`linux-esp`) and assigns the remainder to ext4 `rootfs`. It preserves
+ESP (`linux-esp`) and assigns the remainder to `rootfs`. Its geometry is
+independent of the filesystem selected by the installation archive. It preserves
 userdata's starting LBA and the entries of all preceding partitions.
 Captures and device GUIDs belong outside the public repository.
 
@@ -82,8 +87,10 @@ default umask can otherwise change modes such as `/tmp`'s `1777`, even
 when the archive records them correctly. This is an artifact-validation
 detail, not an instruction to format or extract onto a tablet yet.
 
-The first `y700` password is locked and automatic login is disabled. Before
-using the desktop, set a password through the trusted USB root connection.
+The repository's persistent development profile locks the initial `y700`
+password and enables GNOME automatic login. Set a password through the
+trusted USB root connection for authenticated local login. The exported
+hardware and GNOME modules do not create this account or enable autologin.
 SSH is restricted to the development USB link and host key. Real suspend
 remains disabled pending a separate hardware test. These are development
 installation defaults, not a release account/security policy.
@@ -104,7 +111,8 @@ installation on that partition.
 
 The initramfs rejects duplicate labels. It protects Android siblings and
 other disks, checks the root filesystem using block-level read-only mode
-and `ro,noload`, then checks the installation contract and system profile.
+and `ro,noload` for ext4 or `ro,rescue=nologreplay` for Btrfs, then checks the
+installation contract and system profile.
 Only an accepted root is reopened read/write. It retains firmware in RAM
 and enters the selected profile's stage 2. Following this profile permits
 compatible userspace updates; changing the board kernel still requires a
@@ -142,14 +150,15 @@ It restores its temporary network configuration on disconnect; a detached
 adapter can require the scoped read-only cleanup audit recorded in its
 private logs. Do not apply its settings to another adapter.
 
-Normal reboot currently returns to installed Android. Starting Linux
-again still requires fastboot boot; disconnecting USB after a successful
-boot no longer removes the root filesystem. Keep the boot image and
-matching own-tablet firmware available until a separate boot-manager
-integration has passed.
+With the stock boot image, normal reboot returns to installed Android and
+starting Linux again requires fastboot boot. Installing the separate
+Android/Linux menu changes that startup behavior. In either case,
+disconnecting USB after a successful local-root boot does not remove the
+root filesystem. Keep the verified boot image and matching own-tablet
+firmware available for recovery.
 
-The persistent profile disables automatic login. Initialize the `y700`
-password through trusted USB access and change it for normal use. Reconnect
+The repository development profile enables automatic login. Initialize the
+`y700` password through trusted USB access and change it for normal use. Reconnect
 Wi-Fi if no private connection profile was restored. Compatible userspace
 updates may select a registered system profile while retaining old
 generations, but the current generic NixOS bootspec does not describe the

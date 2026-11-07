@@ -4,9 +4,10 @@
     "commit": "8d3ae59288f1e7d58d76558a6ee96d533bc5019f",
     "base_tree": "a25d6a94ad99aa059aa6dc728c45052fb2968352",
     "patches": [
-      "patches/kernel/0001-y700-gen4-support.patch"
+      "patches/kernel/0001-y700-gen4-support.patch",
+      "patches/kernel/0002-backlight-aw99706-honor-blanking.patch"
     ],
-    "tree": "abb1b30a2ef5c0a7fc5e3e4ed35bbefb02462da4"
+    "tree": "28aac546fa1a11a7ed0847f1680ac1fec0100c6d"
   },
   "libcamera": {
     "url": "https://gitlab.freedesktop.org/camera/libcamera.git",

@@ -10,7 +10,8 @@ downloaded checkouts are not committed to this repository.
 - Upstream: official Linux 7.2, commit
   `8d3ae59288f1e7d58d76558a6ee96d533bc5019f`.
 - Upstream source tree: `a25d6a94ad99aa059aa6dc728c45052fb2968352`.
-- Resulting source tree: `abb1b30a2ef5c0a7fc5e3e4ed35bbefb02462da4`.
+- Initial board source tree: `abb1b30a2ef5c0a7fc5e3e4ed35bbefb02462da4`.
+- Current patched source tree: `28aac546fa1a11a7ed0847f1680ac1fec0100c6d`.
 - Initial patch:
   [`0001-y700-gen4-support.patch`](0001-y700-gen4-support.patch).
 - Original device commit:
@@ -29,6 +30,21 @@ It does not change kernel behavior or add firmware/calibration payloads.
 Reproducing the exact source tree is the acceptance criterion for this
 packaging change. It does not promise byte-identical images across different
 toolchains, build metadata or Git histories.
+
+## Display blanking fix
+
+`0002-backlight-aw99706-honor-blanking.patch` changes the AW99706
+`update_status` callback to use `backlight_get_brightness()`. The previous
+callback ignored power/blanking/suspend state and continued applying the
+saved nonzero brightness after the panel requested backlight-off.
+The helper supplies zero while blanked, allowing the existing hardware path
+to clear the brightness registers and backlight enable bit. Unblanking
+restores the saved requested brightness.
+
+This does not enable system suspend, change GNOME policy or claim that all
+display power rails are off. Target backlight-off and display/touch recovery
+must be validated on a separately built image before marking the fix
+accepted.
 
 ## Making a change
 

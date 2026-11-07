@@ -9,7 +9,7 @@ fail() {
     "$BB" timeout 5 "$BB" umount /newroot 2>/dev/null || true
     if [ -f /etc/y700-efi-system ]; then
         echo "EFI generation rejected; powering off in 15 seconds." >&2
-        echo "Hold Volume Down at the next power-on for the OpenABL menu." >&2
+        echo "Select Android in the kShimC menu at the next power-on." >&2
         "$BB" sleep 15
         "$BB" poweroff -f -n
         while :; do "$BB" sleep 3600; done
@@ -82,13 +82,17 @@ done
 root_parent=$("$BB" dirname "$("$BB" readlink -f "$root_node")")
 root_parent=${root_parent##*/}
 
-# Setting the root disk read-only would also make rootfs read-only. Protect
-# its siblings individually, and protect all other enumerated UFS disks.
+# The immutable initramfs marker selects an all-storage-read-only test.
+# Persistent boots protect Android siblings but keep the root disk writable.
+readonly_root=0
+[ ! -f /etc/y700-root-readonly ] || readonly_root=1
 for node in /sys/class/block/sd*; do
     device=/dev/${node##*/}
     [ -b "$device" ] || continue
-    [ "$device" = "$root_device" ] && continue
-    [ "$device" = "/dev/$root_parent" ] && continue
+    if [ "$readonly_root" = 0 ]; then
+        [ "$device" = "$root_device" ] && continue
+        [ "$device" = "/dev/$root_parent" ] && continue
+    fi
     "$BB" blockdev --setro "$device" || fail "protect $device"
     [ "$("$BB" blockdev --getro "$device")" = 1 ] || fail "verify protection $device"
 done
@@ -111,19 +115,71 @@ validate_root() {
 }
 
 "$BB" mkdir -p /newroot /run
-# ro alone can replay an ext4 journal. Block writes and suppress recovery
+# ro alone can replay a filesystem log. Block writes and suppress recovery
 # until the install contract, profile and actual init have been checked.
 "$BB" blockdev --setro "$root_device" || fail "protect root before validation"
 [ "$("$BB" blockdev --getro "$root_device")" = 1 ] || fail "verify read-only root"
-"$BB" mount -t ext4 -o ro,noload "$root_device" /newroot || fail "inspect rootfs"
-validate_root
-"$BB" umount /newroot || fail "unmount inspected root"
-"$BB" blockdev --setrw "$root_device" || fail "enable approved root"
-[ "$("$BB" blockdev --getro "$root_device")" = 0 ] || fail "verify writable root"
-"$BB" mount -t ext4 -o rw,noatime,errors=remount-ro "$root_device" /newroot || fail "mount rootfs"
-# Recovery may update metadata. Select the effective profile after replay.
+root_identity=$("$BB" blkid "$root_device") || fail "identify rootfs"
+root_type=$(echo "$root_identity" | "$BB" sed -n 's/.* TYPE="\([^"]*\)".*/\1/p')
+case "$root_type" in
+    ext4) inspect_options=ro,noload; write_options=rw,noatime,errors=remount-ro ;;
+    btrfs) inspect_options=ro,rescue=nologreplay; write_options=rw,noatime,compress=zstd:1 ;;
+    *) fail "unsupported rootfs type: $root_type" ;;
+esac
+"$BB" mount -t "$root_type" -o "$inspect_options" "$root_device" /newroot || fail "inspect rootfs"
 validate_root
 "$BB" mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run || fail "mount run"
+# NixOS stage2 uses /dev/fd for shell process substitution before udev.
+for alias in fd stdin stdout stderr; do
+    case "$alias" in
+        fd) target=/proc/self/fd ;;
+        stdin) target=/proc/self/fd/0 ;;
+        stdout) target=/proc/self/fd/1 ;;
+        stderr) target=/proc/self/fd/2 ;;
+    esac
+    if [ -L "/dev/$alias" ]; then
+        [ "$("$BB" readlink "/dev/$alias")" = "$target" ] ||
+            fail "unexpected /dev/$alias"
+    else
+        [ ! -e "/dev/$alias" ] && "$BB" ln -s "$target" "/dev/$alias" ||
+            fail "prepare /dev/$alias"
+    fi
+done
+if [ "$readonly_root" = 1 ]; then
+    # Retain both backing mounts under /run across switch_root. No log
+    # replay, remount-rw or write-enable operation belongs to this branch.
+    "$BB" mkdir -p /run/y700-root/lower /run/y700-root/overlay
+    "$BB" mount --move /newroot /run/y700-root/lower || fail "retain read-only root"
+    "$BB" mount -t tmpfs -o mode=0755,nosuid,nodev,size=2G rootfs-overlay \
+        /run/y700-root/overlay || fail "mount overlay tmpfs"
+    "$BB" mkdir -p /run/y700-root/overlay/upper /run/y700-root/overlay/work
+    "$BB" mount -t overlay overlay \
+        -o lowerdir=/run/y700-root/lower,upperdir=/run/y700-root/overlay/upper,workdir=/run/y700-root/overlay/work \
+        /newroot || fail "mount rootfs overlay"
+    echo readonly-overlay > /run/y700-root/mode
+    # The installed fstab describes persistent storage. This RAM test exposes
+    # only its already-mounted overlay; both systemd and mount need that view.
+    "$BB" printf 'overlay / overlay rw,noatime 0 0\n' > /run/y700-root/fstab ||
+        fail "write RAM fstab"
+    export SYSTEMD_FSTAB=/run/y700-root/fstab
+    export LIBMOUNT_FSTAB=/run/y700-root/fstab
+    "$BB" mkdir -p /run/systemd/system/systemd-remount-fs.service.d ||
+        fail "prepare RAM remount unit"
+    "$BB" cat > /run/systemd/system/systemd-remount-fs.service.d/90-y700-readonly.conf <<'EOF'
+[Service]
+Environment=SYSTEMD_FSTAB=/run/y700-root/fstab
+Environment=LIBMOUNT_FSTAB=/run/y700-root/fstab
+EOF
+    [ "$?" = 0 ] || fail "write RAM remount unit"
+    echo "Y700_READONLY_ROOT=$root_device"
+else
+    "$BB" umount /newroot || fail "unmount inspected root"
+    "$BB" blockdev --setrw "$root_device" || fail "enable approved root"
+    [ "$("$BB" blockdev --getro "$root_device")" = 0 ] || fail "verify writable root"
+    "$BB" mount -t "$root_type" -o "$write_options" "$root_device" /newroot || fail "mount rootfs"
+    # Recovery may update metadata. Select the effective profile after replay.
+    validate_root
+fi
 
 if [ "$usb_debug" = 1 ]; then
     . /etc/usb-rndis

@@ -402,6 +402,10 @@ def install(request):
                 "Linux partition already has a signature; formatting cannot be retried")
     archive = BASE / "nixos-rootfs.tar.gz"
     meta = request["archive"]
+    root_type = meta.get("rootfs_type", "ext4")
+    require(root_type in ("ext4", "btrfs"), "Unsupported archive root filesystem")
+    if root_type == "btrfs":
+        require(shutil.which("mkfs.btrfs") and shutil.which("btrfs"), "Missing Btrfs maintenance tools")
     require(archive.stat().st_size == meta["archive_bytes"] and
             digest(archive) == meta["archive_sha256"], "Installation archive mismatch")
     private = BASE / "ssh-host-state.tar"
@@ -419,10 +423,13 @@ def install(request):
         require(run("blockdev", "--getro", path) == "0", "Linux target is read-only")
     destination = BASE / "target"
     destination.mkdir(mode=0o700)
-    checked_command("format-ext4", "mkfs.ext4", "-F", "-b", "4096", "-m", "0", "-L", "rootfs",
-                    "-E", "nodiscard,lazy_itable_init=0,lazy_journal_init=0", rootdev)
+    if root_type == "btrfs":
+        checked_command("format-btrfs", "mkfs.btrfs", "--nodiscard", "-L", "rootfs", rootdev)
+    else:
+        checked_command("format-ext4", "mkfs.ext4", "-F", "-b", "4096", "-m", "0", "-L", "rootfs",
+                        "-E", "nodiscard,lazy_itable_init=0,lazy_journal_init=0", rootdev)
     checked_command("format-esp", "mkfs.fat", "-F", "32", "-S", "4096", "-n", "LINUXESP", espdev)
-    run("mount", "-t", "ext4", "-o", "noatime", rootdev, destination)
+    run("mount", "-t", root_type, "-o", "noatime", rootdev, destination)
     try:
         checked_command("extract", "tar", "--numeric-owner", "--xattrs", "--acls",
                         "--same-owner", "--same-permissions",
@@ -448,11 +455,14 @@ def install(request):
         run("sync", "-f", destination)
     finally:
         run("umount", destination)
-    checked_command("check-ext4", "e2fsck", "-f", "-n", rootdev)
+    if root_type == "btrfs":
+        checked_command("check-btrfs", "btrfs", "check", "--readonly", rootdev)
+    else:
+        checked_command("check-ext4", "e2fsck", "-f", "-n", rootdev)
     checked_command("check-esp", "fsck.fat", "-n", espdev)
     compare_gpts(capture(), expected)
     require(partition_hashes() == saved, "Android partition changed during installation")
-    run("mount", "-t", "ext4", "-o", "noatime", rootdev, destination)
+    run("mount", "-t", root_type, "-o", "noatime", rootdev, destination)
     contract = destination / "etc/y700-rootfs-contract"
     try:
         with contract.open("x") as stream:
@@ -475,8 +485,9 @@ def verify(request):
     compare_gpts(capture(), approved_gpts(request))
     rootdev = Path("/dev/disk/by-partlabel/rootfs").resolve(strict=True)
     root = json.loads(run("findmnt", "-J", "-o", "SOURCE,FSTYPE,OPTIONS", "/"))["filesystems"][0]
-    require(root["source"] == str(rootdev) and root["fstype"] == "ext4" and
-            "rw" in root["options"].split(","), "Not the installed writable ext4 root")
+    require(root["source"].split("[", 1)[0] == str(rootdev) and
+            root["fstype"] in ("ext4", "btrfs") and
+            "rw" in root["options"].split(","), "Not the installed writable root")
     require(str(Path("/nix/var/nix/profiles/system").resolve()) == request["system"], "Profile differs")
     require(not list(Path("/sys/class/block").glob("nbd*")), "NBD remains present")
     require(not any(line.split()[2] == "overlay" for line in Path("/proc/mounts").read_text().splitlines()),

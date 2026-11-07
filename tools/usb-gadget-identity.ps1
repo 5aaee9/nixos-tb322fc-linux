@@ -39,3 +39,28 @@ function Assert-GadgetRoute($NetworkAdapter, [string]$DeviceAddress) {
         throw "The device address routes through another interface; leaving routing unchanged."
     }
 }
+
+function Wait-GadgetIPv4Address(
+    $NetworkAdapter, [string]$Address, [int]$TimeoutMilliseconds = 10000
+) {
+    if ($TimeoutMilliseconds -le 0) { throw "Address readiness needs a positive timeout." }
+    $elapsed = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $addresses = @(Get-NetIPAddress -InterfaceIndex $NetworkAdapter.ifIndex `
+            -AddressFamily IPv4 -PolicyStore ActiveStore -ErrorAction Stop |
+            Where-Object { $_.IPAddress -eq $Address })
+        if ($addresses.Count -gt 1) { throw "Temporary USB address is ambiguous." }
+        if ($addresses.Count -eq 1) {
+            $current = $addresses[0]
+            if ($current.PrefixLength -ne 24) { throw "Unexpected USB address prefix." }
+            if ($current.AddressState -eq "Duplicate" -or $current.AddressState -eq "Invalid") {
+                throw "Temporary USB address is not usable: $($current.AddressState)."
+            }
+            if ($current.AddressState -eq "Preferred") { return }
+        }
+        # Route selection may use another adapter while DAD is still pending.
+        if ($elapsed.ElapsedMilliseconds -ge $TimeoutMilliseconds) { break }
+        Start-Sleep -Milliseconds 200
+    } while ($elapsed.ElapsedMilliseconds -lt $TimeoutMilliseconds)
+    throw "Temporary USB address did not become preferred before the deadline."
+}

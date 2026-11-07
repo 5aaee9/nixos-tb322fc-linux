@@ -11,10 +11,10 @@
 
   fileSystems."/" = {
     device = lib.mkDefault "/dev/disk/by-partlabel/rootfs";
-    fsType = lib.mkDefault "ext4";
+    fsType = lib.mkDefault "btrfs";
     options = lib.mkDefault [
       "noatime"
-      "errors=remount-ro"
+      "compress=zstd:1"
     ];
   };
 

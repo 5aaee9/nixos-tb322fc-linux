@@ -59,8 +59,28 @@ let
         cd "$out"
         sha256sum nixos-rootfs.ext4 > SHA256SUMS
       '';
+  mkBtrfs = profile: archive:
+    pkgs.runCommand "y700-rootfs-${profile}-btrfs"
+      { nativeBuildInputs = [ pkgs.btrfs-progs pkgs.fakeroot pkgs.gnutar ]; }
+      ''
+        mkdir "$out" staging
+        truncate -s 12G "$out/nixos-rootfs.btrfs"
+        fakeroot -- sh -e -c '
+          tar --numeric-owner --same-owner --same-permissions --xattrs --acls \
+            -xzpf "$1/nixos-rootfs.tar.gz" -C staging
+          mkfs.btrfs --rootdir staging --label rootfs "$2/nixos-rootfs.btrfs"
+        ' sh ${archive} "$out"
+        btrfs check --readonly "$out/nixos-rootfs.btrfs"
+        cp ${archive}/metadata.json "$out/rootfs-metadata.json"
+        cd "$out"
+        sha256sum nixos-rootfs.btrfs > SHA256SUMS
+      '';
 in
 {
   inherit profiles archives;
-  images = lib.mapAttrs mkExt4 archives;
+  images = {
+    base = mkExt4 "base" archives.base;
+    desktop = mkExt4 "desktop" archives.desktop;
+    persistent = mkBtrfs "persistent" archives.persistent;
+  };
 }

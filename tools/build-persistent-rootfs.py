@@ -116,7 +116,8 @@ def main():
         "registration_sha256": hashlib.sha256(registration).hexdigest(),
         "archive_sha256": digest(archive), "archive_bytes": archive.stat().st_size,
         "profile": args.profile,
-        "account_policy": ("locked initial y700 password, no autologin; set password before desktop use"
+        "rootfs_type": "btrfs" if args.profile == "persistent" else "ext4",
+        "account_policy": ("locked initial y700 password, attended development autologin"
                            if args.profile == "persistent" else "disposable development rootfs"),
         "diagnostics": "trusted-host USB SSH development policy remains; not a release image",
         "source_sha256": {str(path.relative_to(PROJECT)): digest(path) for path in [

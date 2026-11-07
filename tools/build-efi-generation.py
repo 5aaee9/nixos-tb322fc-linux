@@ -78,7 +78,8 @@ def esp_namespace(generation, kernel_hash, initrd_hash, dtb_hash):
     return f"EFI/nixos/{generation}-{identity}"
 
 
-def build_initrd(output, system, generation, firmware_dir=None, busybox=None, gen_init_cpio=None):
+def build_initrd(output, system, generation, firmware_dir=None, busybox=None,
+                 gen_init_cpio=None, readonly_root=False):
     (output / "system-path").write_text(system + "\n")
     (output / "generation-number").write_text(str(generation) + "\n")
     listing = (VENDOR / "configs/initramfs-tb322fc-prc.list").read_text()
@@ -87,6 +88,9 @@ def build_initrd(output, system, generation, firmware_dir=None, busybox=None, ge
         f"file /etc/y700-efi-system {output}/system-path 0444 0 0\n"
         f"file /etc/y700-efi-generation {output}/generation-number 0444 0 0\n"
     )
+    if readonly_root:
+        (output / "root-readonly").write_text("readonly-overlay\n")
+        listing += f"file /etc/y700-root-readonly {output}/root-readonly 0444 0 0\n"
     (output / "initramfs.list").write_text(listing)
     env = os.environ | {"PROJECT": str(VENDOR),
                         "FIRMWARE_DIR": str(firmware_dir or VENDOR / "inputs/firmware"),
@@ -107,6 +111,8 @@ def main():
     parser.add_argument("--generation", required=True, type=int)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--usb-debug", action="store_true")
+    parser.add_argument("--readonly-root", action="store_true",
+                        help="protect all UFS nodes and use a volatile root overlay")
     parser.add_argument("--firmware", type=Path, default=VENDOR / "inputs/firmware")
     parser.add_argument("--busybox", type=Path, default=VENDOR / "build/busybox/busybox")
     parser.add_argument("--gen-init-cpio", type=Path, default=VENDOR / "build/gen_init_cpio")
@@ -131,7 +137,8 @@ def main():
     output.mkdir(parents=True)
     shutil.copyfile(kernel / "Image", output / "linux.efi")
     shutil.copyfile(kernel / "elden.dtb", output / "elden.dtb")
-    size = build_initrd(output, system, args.generation, args.firmware, args.busybox, args.gen_init_cpio)
+    size = build_initrd(output, system, args.generation, args.firmware, args.busybox,
+                        args.gen_init_cpio, args.readonly_root)
     (output / "options").write_text(options + "\n")
     namespace = esp_namespace(args.generation, sha(output / "linux.efi"),
                               sha(output / "initrd.gz"), sha(output / "elden.dtb"))
@@ -152,6 +159,7 @@ def main():
         "firmware_manifest_sha256": sha(VENDOR / "firmware-tb322fc-prc.json"),
         "nixpkgs": json.loads((PROJECT / "flake.lock").read_text())["nodes"]["nixpkgs"]["locked"],
         "scope": "offline board EFI generation; no tablet boot or installation",
+        "root_mode": "readonly-overlay" if args.readonly_root else "persistent",
         "gen_init_cpio_sha256": sha(args.gen_init_cpio),
         "diagnostics": "USB development access" if args.usb_debug else "USB gadget disabled",
         "files": {name: sha(output / name) for name in

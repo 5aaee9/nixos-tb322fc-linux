@@ -3,31 +3,39 @@
 Experimental NixOS GNOME integration for the Lenovo Legion Tab Y700 Gen 4:
 **TB322FC / elden, Qualcomm SM8750, 16 GB RAM and 512 GB storage**.
 
-The development system boots with `fastboot boot` and can use either a
-temporary USB/NBD root or an installed internal ext4 root. Android and its
-installed boot images are retained. The [complete installation guide](docs/public/install.md)
-provides a staged Windows/WSL installer for a 256 GiB Linux allocation with an
-Android data reset. The combined script is offline tested; the underlying
-installation and persistent boot procedure has passed on the development
-tablet. A bootloader unlock procedure is not included.
+The development tablet boots an installed Android/Linux menu through stock
+ABL, kShimC, RAM U-Boot EFI and systemd-boot. Linux uses a writable internal
+Btrfs root and automatically opens GNOME. Android remains selectable, using
+the tablet's own stock Android kernel; the installed menu replaces only
+`boot_a`. Temporary `fastboot boot` and USB/NBD maintenance remain available.
+
+The [complete installation guide](docs/public/install.md) provides a staged
+Windows/WSL installer for a 256 GiB Linux allocation with an Android data
+reset. The combined fresh-install script has offline tests; the existing
+tablet's [Btrfs migration and boot-menu installation](docs/public/btrfs.md)
+have passed separate on-device checks. A bootloader unlock procedure is not
+included.
 
 ## Current status
 
 The tested configuration uses pinned NixOS 26.05, GNOME on Wayland and the
 elden kernel baseline. Kernel sources come from a fixed official Linux commit
 with [device patches maintained here](vendor/tb322fc-linux/patches/kernel/README.md).
-As of the November 2, 2026 tests:
+As of the November 7, 2026 tests:
 
 | Component | Evidence |
 | --- | --- |
-| Temporary Linux boot and GNOME automatic login | Verified on the target tablet |
-| Display, touch, Wi-Fi and speakers | Target observations and machine evidence; see the scoped status record |
+| Installed Linux boot and GNOME automatic login | Normal boot reaches systemd-boot generation 3 and an active Wayland desktop |
+| Display and touch | Earlier target observations pass; the separate backlight-off fix still needs physical confirmation |
+| Wi-Fi | Earlier non-EFI sessions passed; the current EFI session scans but WPA3 association remains unresolved |
+| Speakers | Earlier sound confirmed; EFI UCM selection fix is installed, with physical sound confirmation pending |
 | GPU | GNOME uses the MSM/GBM/EGL path; broader graphics acceptance is pending |
 | Power key | System handler passes fresh-boot/injected checks; owner confirms physical button behavior |
 | Firewall and USB diagnostics | Verified with the repaired kernel configuration |
 | System suspend | Still disabled, including the internal-root development profile |
-| Persistent Linux installation | 1 GiB future ESP + 255 GiB ext4; two boots and Android round trip pass; combined installer awaits hardware acceptance |
-| OpenABL / systemd-boot | Complete offline ABL and board EFI candidates built; QEMU generation handoff passes; target authentication, recovery and EFI acceptance remain unproven |
+| Persistent Linux installation | 255 GiB Btrfs with preserved files and rollback data; 1 GiB ESP unchanged; combined fresh installer awaits hardware acceptance |
+| UEFI / systemd-boot | Installed boot menu passes on the tablet; EFI files are embedded in boot.img, with disk-ESP generation updates still pending |
+| OpenABL | Replacement ABL trials crashed; stock ABL is restored and retained |
 
 Short power-key release toggles the display. Holding it for about two seconds
 opens the existing GNOME power menu. The implementation uses udev and a
@@ -76,17 +84,20 @@ The desktop development configuration accepts an external SSH public key and
 creates a disposable `y700` account with automatic login and an empty local
 password through its unexported `nix/profiles/` files. It is intended for
 attended development on a trusted USB connection.
-The USB cable and NBD server must remain available while Linux uses this rootfs.
+The USB cable and NBD server must remain available while Linux uses the
+temporary USB/NBD rootfs. The installed Btrfs system runs without them.
 
 For internal storage, follow the [complete installation workflow](docs/public/install.md)
-and [persistent rootfs design](docs/public/persistent-rootfs.md). It clears
-Android user data, retains Android itself, initializes a private desktop
-password and verifies persistence. It does not install OpenABL/systemd-boot;
-Linux still starts with `fastboot boot`.
+and [persistent rootfs design](docs/public/persistent-rootfs.md). The fresh
+installer clears Android user data, retains Android itself, initializes a
+private desktop password and verifies persistence. It leaves installed boot
+images unchanged. The separately reviewed Btrfs migration/menu installation
+preserves the existing files and enables normal Linux startup; do not run
+the fresh installer to migrate an existing Linux root.
 
-The [OpenABL and board EFI guide](docs/public/openabl-efi.md) covers offline
-kernel, generation and ESP packaging plus the native SM8750 ABL build.
-The generated ABL carries only a placeholder signature and is not an
+The [OpenABL and board EFI guide](docs/public/openabl-efi.md) covers the
+working stock-ABL EFI route and the separate replacement-ABL experiments.
+The generated OpenABL carries only a placeholder signature and is not an
 accepted tablet installation image. The [EFI lab](docs/public/efi-chain-lab.md)
 documents the narrower emulator tests.
 

@@ -7,6 +7,12 @@ let
       self.nixosModules.y700
       self.nixosModules.gnome
       ../../nixos/configuration.nix
+      ({ lib, pkgs, ... }: {
+        # USB/NBD maintenance images retain their established ext4 format.
+        fileSystems."/".fsType = lib.mkOverride 900 "ext4";
+        fileSystems."/".options = lib.mkOverride 900 [ "noatime" "errors=remount-ro" ];
+        environment.systemPackages = [ pkgs.btrfs-progs ];
+      })
     ];
   };
   desktop = base.extendModules {

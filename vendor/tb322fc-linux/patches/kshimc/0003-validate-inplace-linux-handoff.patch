@@ -1,0 +1,319 @@
+diff --git a/vendor/kshim/CMakeLists.txt b/vendor/kshim/CMakeLists.txt
+index 04162bc..24e6d1f 100644
+--- a/vendor/kshim/CMakeLists.txt
++++ b/vendor/kshim/CMakeLists.txt
+@@ -161,7 +161,7 @@ set(SRC_FILES
+     lib/libfdt/fdt_overlay.c
+ 
+     src/core/main.c src/core/platform.c src/core/uefi_boot.c src/core/picoport.c src/core/boot_metrics.c
+-    src/core/menu_locale.c src/core/boot_settings.c
++    src/core/menu_locale.c src/core/boot_settings.c src/core/linux_inplace.c
+     src/dt/dt.c src/dt/device_info.c src/dt/initrd.c src/dt/handoff.c src/dt/handoff_reservations.c src/dt/console.c src/dt/resources.c src/dt/probe.c
+     src/dt/tb323fu_ramoops.c src/dt/tb323fu_ramoops_export.c
+     src/drivers/console.c src/drivers/pl011.c src/drivers/keys.c src/drivers/qcom_reboot.c src/drivers/qcom_nv.c
+diff --git a/vendor/kshim/src/core/linux_inplace.c b/vendor/kshim/src/core/linux_inplace.c
+new file mode 100644
+index 0000000..d407db8
+--- /dev/null
++++ b/vendor/kshim/src/core/linux_inplace.c
+@@ -0,0 +1,106 @@
++/* SPDX-License-Identifier: MIT */
++#include <linux_inplace.h>
++#include <string.h>
++
++static uint64_t le64(const void *data)
++{
++    const unsigned char *p = data;
++    uint64_t value = 0;
++    for (unsigned i = 0; i < 8; ++i)
++        value |= (uint64_t)p[i] << (8 * i);
++    return value;
++}
++
++static bool valid_range(struct dt_range range)
++{
++    return range.size && range.base <= UINT64_MAX - range.size;
++}
++
++static bool overlap(struct dt_range a, struct dt_range b)
++{
++    return a.base < b.base + b.size && b.base < a.base + a.size;
++}
++
++int kshim_linux_inplace_check(const struct kshim_linux_inplace *c)
++{
++    if (!c || !c->entries || c->count != 3 || !c->image || !c->fdt ||
++        !c->entries[0] || !c->entries[1] || !c->entries[2] ||
++        !c->payload_size || c->payload_size >= c->packed_size ||
++        c->packed_size > UINT64_C(0x8000000) ||
++        c->packed_base > UINT64_MAX - c->packed_size)
++        return -1;
++    const MANIFEST_ENTRY *android = c->entries[0], *target = c->entries[1];
++    const MANIFEST_ENTRY *shim = c->entries[2];
++    if (android->offset || android->type != MF_ENTRY_TYPE_LINUX ||
++        android->flags != (MF_ENTRY_FLAG_BASE_IMAGE | MF_ENTRY_FLAG_EXECUTABLE) ||
++        target->type != MF_ENTRY_TYPE_LINUX || target->flags != MF_ENTRY_FLAG_EXECUTABLE ||
++        target->entry_offset || target->load_address || target->copy_size_max ||
++        target->device_tree_blob_entry || target->alignment != 21 ||
++        shim->type != MF_ENTRY_TYPE_SHIM || shim->flags != MF_ENTRY_FLAG_EXECUTABLE)
++        return -2;
++    for (unsigned i = 0; i < c->count; ++i) {
++        const MANIFEST_ENTRY *e = c->entries[i];
++        if (!e->size || e->offset > c->payload_size ||
++            e->size > c->payload_size - e->offset)
++            return -2;
++    }
++    const unsigned char *header = c->image;
++    if (target->size < 64 || memcmp(header + 56, "ARM\x64", 4) ||
++        le64(header + 8) != 0 || le64(header + 24) != 0xa ||
++        le64(header + 16) < 64 || c->android_image_size < 64)
++        return -3;
++    struct dt_range ranges[] = {
++        {c->packed_base, c->android_image_size > android->size ?
++                        c->android_image_size : android->size},
++        {c->packed_base + target->offset, le64(header + 16) > target->size ?
++                                        le64(header + 16) : target->size},
++        {c->packed_base + shim->offset, shim->size},
++    };
++    if ((ranges[1].base & (UINT64_C(0x200000) - 1)) ||
++        !valid_range(c->runtime) ||
++        !dt_contains(ranges[2], c->runtime.base, c->runtime.size))
++        return -4;
++    struct dt_range payload = {c->packed_base, c->payload_size};
++    for (unsigned i = 0; i < 3; ++i) {
++        if (!valid_range(ranges[i]) ||
++            !dt_contains(payload, ranges[i].base, ranges[i].size))
++            return -4;
++        for (unsigned j = 0; j < i; ++j)
++            if (overlap(ranges[i], ranges[j]))
++                return -4;
++    }
++    uint64_t fdt_base = (uint64_t)(uintptr_t)c->fdt;
++    if ((fdt_base & 7) || fdt_check_header(c->fdt))
++        return -5;
++    struct dt_range fdt_range = {fdt_base, (uint32_t)fdt_totalsize(c->fdt)};
++    struct dt_range packed = {c->packed_base, c->packed_size};
++    if (!valid_range(fdt_range) || fdt_range.size > UINT64_C(0x200000) ||
++        dt_validate(c->fdt, fdt_range.size) || overlap(fdt_range, packed))
++        return -5;
++
++    bool in_ram = false;
++    int node;
++    fdt_for_each_subnode(node, c->fdt, 0) {
++        const char *type = dt_string(c->fdt, node, "device_type");
++        if (!type || strcmp(type, "memory") || !dt_available(c->fdt, node))
++            continue;
++        for (unsigned i = 0; ; ++i) {
++            struct dt_range bank;
++            if (dt_raw_reg(c->fdt, node, i, &bank.base, &bank.size))
++                break;
++            if (valid_range(bank) && dt_contains(bank, ranges[1].base, ranges[1].size))
++                in_ram = true;
++        }
++    }
++    if (!in_ram)
++        return -6;
++    struct dt_range reserved[128];
++    bool no_map[128];
++    size_t count = 0;
++    if (dt_reservations(c->fdt, reserved, no_map, 128, &count))
++        return -7;
++    for (size_t i = 0; i < count; ++i)
++        if (!valid_range(reserved[i]) || overlap(ranges[1], reserved[i]))
++            return -7;
++    return 0;
++}
+diff --git a/vendor/kshim/src/core/main.c b/vendor/kshim/src/core/main.c
+index 5da88ac..4dc124b 100644
+--- a/vendor/kshim/src/core/main.c
++++ b/vendor/kshim/src/core/main.c
+@@ -10,6 +10,7 @@
+ #include <device_info.h>
+ #include <boot_metrics.h>
+ #include <kshim_mmu.h>
++#include <linux_inplace.h>
+ #include <dt.h>
+ #include <initrd.h>
+ #include <qcom_dt.h>
+@@ -860,6 +861,31 @@ int kshim_main(
+                                                &device_info);
+         kshim_boot_metrics_record_once(KSHIM_BOOT_STAGE_HANDOFF);
+         const MANIFEST_ENTRY *entry = view.entries[selected_index];
++        int linux_inplace_status = 0;
++        if (entry->type == MF_ENTRY_TYPE_LINUX &&
++            !(entry->flags & (MF_ENTRY_FLAG_BASE_IMAGE | MF_ENTRY_FLAG_COPY |
++                              MF_ENTRY_FLAG_HAS_DEVICE_TREE_BLOB))) {
++            const struct kshim_linux_inplace context = {
++                .entries = view.entries, .count = view.manifest->header.entry_count,
++                .image = (const void *)(uintptr_t)(linux_base + entry->offset),
++                .packed_base = linux_base,
++                .packed_size = manifest_address + manifest_size - linux_base,
++                .payload_size = manifest_address - linux_base,
++                .android_image_size = view.manifest->header.base_image.image_size,
++                .runtime = {
++                    (uint64_t)(uintptr_t)__image_start_address__,
++                    (uint64_t)(__runtime_end_address__ - __image_start_address__),
++                },
++                .fdt = runtime_fdt,
++            };
++            linux_inplace_status = kshim_linux_inplace_check(&context);
++            if (linux_inplace_status) {
++                printf("Linux RAM handoff rejected (%d); booting Android\n",
++                       linux_inplace_status);
++                selected_index = 0;
++                entry = view.entries[0];
++            }
++        }
+         if ((entry->flags & MF_ENTRY_FLAG_BASE_IMAGE) &&
+             !(entry->flags & MF_ENTRY_FLAG_HAS_DEVICE_TREE_BLOB)) {
+             dt_probe_report((void *)runtime_fdt, "m14:base=selected");
+@@ -1301,13 +1327,13 @@ int kshim_main(
+             struct kshim_resources *rr = kshim_resources_get();
+             char diag[192];
+             int dn = snprintf(diag, sizeof(diag),
+-                              "tb322fc-diag-v1;splash=%d;gui=%d;fb=%ux%u;stride=%u;sel=%u",
++                              "tb322fc-diag-v1;splash=%d;gui=%d;fb=%ux%u;stride=%u;sel=%u;linux=%d",
+                               rr ? rr->splash_status : -99,
+                               kshim_platform_gui_status(),
+                               rr ? (unsigned)rr->framebuffer.width : 0U,
+                               rr ? (unsigned)rr->framebuffer.height : 0U,
+                               rr ? (unsigned)rr->framebuffer.stride : 0U,
+-                              (unsigned)selected_index);
++                              (unsigned)selected_index, linux_inplace_status);
+             if (dn > 0 && dn < (int)sizeof(diag)) {
+                 void *src = (void *)(uintptr_t)device_tree_address;
+                 int dchosen = fdt_path_offset(src, "/chosen");
+diff --git a/vendor/kshim/src/include/linux_inplace.h b/vendor/kshim/src/include/linux_inplace.h
+new file mode 100644
+index 0000000..b3f8d8e
+--- /dev/null
++++ b/vendor/kshim/src/include/linux_inplace.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: MIT */
++#pragma once
++#include <dt.h>
++#include <manifest.h>
++
++/* Narrow Android + no-copy, built-in-DT Linux + shim RAM-test contract.
++ * The caller has already parsed and bounded the manifest and Image header. */
++struct kshim_linux_inplace {
++    const MANIFEST_ENTRY *const *entries;
++    uint32_t count;
++    const void *image;
++    uint64_t packed_base, packed_size, payload_size, android_image_size;
++    struct dt_range runtime;
++    const void *fdt;
++};
++int kshim_linux_inplace_check(const struct kshim_linux_inplace *context);
+diff --git a/vendor/kshim/tests/CMakeLists.txt b/vendor/kshim/tests/CMakeLists.txt
+index db84cf5..5dbf3e7 100644
+--- a/vendor/kshim/tests/CMakeLists.txt
++++ b/vendor/kshim/tests/CMakeLists.txt
+@@ -132,6 +132,8 @@ kshim_test(mmu_test mmu_test.c "${KSHIM_ROOT}/src/arch/arm64/mmu.c")
+ target_compile_definitions(mmu_test PRIVATE KSHIM_MMU_TEST=1)
+ target_include_directories(mmu_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+ target_link_libraries(mmu_test PRIVATE kshim_dt)
++kshim_test(linux_inplace_test linux_inplace_test.c "${KSHIM_ROOT}/src/core/linux_inplace.c")
++target_link_libraries(linux_inplace_test PRIVATE kshim_dt)
+ 
+ set(KSHIM_TEST_MENU_SCALE_Q8 "0" CACHE STRING "Theme design scale; 0=automatic")
+ option(KSHIM_TEST_MENU_REDUCED_EFFECTS "Reduce theme drawing effects" OFF)
+diff --git a/vendor/kshim/tests/linux_inplace_test.c b/vendor/kshim/tests/linux_inplace_test.c
+new file mode 100644
+index 0000000..c6d1158
+--- /dev/null
++++ b/vendor/kshim/tests/linux_inplace_test.c
+@@ -0,0 +1,93 @@
++/* SPDX-License-Identifier: MIT */
++#include <linux_inplace.h>
++#include <assert.h>
++#include <stdio.h>
++#include <string.h>
++
++static uint64_t tree[1024], snapshot[1024];
++static unsigned char header[64];
++static MANIFEST_ENTRY android, linux_entry, shim;
++static const MANIFEST_ENTRY *entries[] = {&android, &linux_entry, &shim};
++static struct kshim_linux_inplace context;
++
++static void put64(unsigned offset, uint64_t value)
++{
++    for (unsigned i = 0; i < 8; ++i)
++        header[offset + i] = (unsigned char)(value >> (8 * i));
++}
++
++static void reset(void)
++{
++    assert(!fdt_create_empty_tree(tree, sizeof(tree)));
++    assert(!fdt_setprop_u32(tree, 0, "#address-cells", 2));
++    assert(!fdt_setprop_u32(tree, 0, "#size-cells", 2));
++    int memory = fdt_add_subnode(tree, 0, "memory@80000000");
++    assert(memory >= 0);
++    assert(!fdt_setprop_string(tree, memory, "device_type", "memory"));
++    fdt64_t reg[] = {cpu_to_fdt64(0x80000000), cpu_to_fdt64(0x10000000)};
++    assert(!fdt_setprop(tree, memory, "reg", reg, sizeof(reg)));
++    memset(header, 0, sizeof(header));
++    memcpy(header + 56, "ARM\x64", 4);
++    put64(16, 0x20000);
++    put64(24, 0xa);
++    android = (MANIFEST_ENTRY){.size=0x10000, .type=1, .flags=5, .alignment=21};
++    shim = (MANIFEST_ENTRY){.offset=0x20000, .size=0x400000, .type=3, .flags=4, .alignment=2};
++    linux_entry = (MANIFEST_ENTRY){.offset=0x600000, .size=0x10000, .type=1, .flags=4,
++                                   .alignment=21};
++    context = (struct kshim_linux_inplace){
++        .entries=entries, .count=3, .image=header,
++        .packed_base=0x80000000, .payload_size=0x620000, .packed_size=0x620100,
++        .android_image_size=0x20000, .runtime={0x80020000, 0x400000}, .fdt=tree,
++    };
++}
++
++static void check(int expected)
++{
++    memcpy(snapshot, tree, sizeof(tree));
++    assert(kshim_linux_inplace_check(&context) == expected);
++    assert(!memcmp(snapshot, tree, sizeof(tree)));
++}
++
++int main(void)
++{
++    reset(); check(0);
++    context.packed_base = UINT64_MAX - 0x1000; check(-1);
++    reset(); linux_entry.flags |= MF_ENTRY_FLAG_COPY; check(-2);
++    reset(); linux_entry.flags |= MF_ENTRY_FLAG_HAS_DEVICE_TREE_BLOB; check(-2);
++    reset(); linux_entry.offset = context.payload_size; check(-2);
++    reset(); header[56] = 0; check(-3);
++    reset(); put64(16, 0); check(-3);
++    reset(); put64(8, 0x80000); check(-3);
++    reset(); put64(24, 0xb); check(-3);
++    reset(); context.packed_base += 4; check(-4);
++    reset(); linux_entry.offset = 0x200000; check(-4);
++    reset(); put64(16, 0x30000); check(-4); /* BSS reaches manifest. */
++    reset(); context.android_image_size = 0x30000; check(-4);
++    reset(); context.runtime.size++; check(-4);
++    reset();
++    context.packed_base = (uint64_t)(uintptr_t)tree & ~UINT64_C(0x1fffff);
++    context.runtime.base = context.packed_base + shim.offset;
++    check(-5); /* Original FDT lies inside downloaded image. */
++    reset(); context.fdt = NULL; check(-1);
++    reset();
++    int memory = fdt_path_offset(tree, "/memory@80000000");
++    fdt64_t reg[] = {cpu_to_fdt64(0x80000000), cpu_to_fdt64(0x610000)};
++    assert(!fdt_setprop(tree, memory, "reg", reg, sizeof(reg)));
++    check(-6); /* BSS extends outside declared RAM. */
++    reset();
++    assert(!fdt_add_mem_rsv(tree, 0x80610000, 0x1000));
++    check(-7);
++    reset();
++    int reserved = fdt_add_subnode(tree, 0, "reserved-memory");
++    assert(reserved >= 0);
++    assert(!fdt_setprop_u32(tree, reserved, "#address-cells", 2));
++    assert(!fdt_setprop_u32(tree, reserved, "#size-cells", 2));
++    assert(!fdt_setprop_empty(tree, reserved, "ranges"));
++    int node = fdt_add_subnode(tree, reserved, "firmware@80600000");
++    assert(node >= 0);
++    reg[0] = cpu_to_fdt64(0x80600000); reg[1] = cpu_to_fdt64(0x1000);
++    assert(!fdt_setprop(tree, node, "reg", reg, sizeof(reg)));
++    assert(!fdt_setprop_empty(tree, node, "no-map"));
++    check(-7);
++    puts("Linux physical placement, BSS, DT and firmware reservations passed");
++}

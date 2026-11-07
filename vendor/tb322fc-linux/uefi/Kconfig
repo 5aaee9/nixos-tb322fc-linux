@@ -1,0 +1,29 @@
+if TARGET_Y700_RAM
+
+config SYS_BOARD
+	default "y700-ram"
+
+config SYS_VENDOR
+	default "lenovo"
+
+config SYS_CONFIG_NAME
+	default "y700-ram"
+
+config TEXT_BASE
+	default 0x80000000
+
+config LNX_KRNL_IMG_TEXT_OFFSET_BASE
+	default 0x80000000
+
+config Y700_RAM_LAB
+	bool "Host-only QEMU entry contract"
+	default n
+	select PL01X_SERIAL
+	select DM_CLK
+	select CLK
+	select CLK_FIXED_RATE
+	help
+	  Accept QEMU's FDT and expose its serial console. This image must
+	  never be packaged as a tablet candidate.
+
+endif

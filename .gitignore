@@ -45,6 +45,7 @@ id_ed25519*
 # Firmware, filesystem images, packed artifacts and compiler output.
 *.img
 *.ext4
+*.btrfs
 *.qcow2
 *.raw
 *.bin

@@ -57,11 +57,15 @@ let
       ${lib.optionalString (mode != "usb-nbd") ''
         echo 'file /etc/usb-rndis ''${PROJECT}/initramfs/usb-rndis 0444 0 0' >> initramfs.list
       ''}
+      ${lib.optionalString (mode == "readonly") ''
+        echo 'file /etc/y700-root-readonly ${pkgs.writeText "y700-root-readonly" "readonly-overlay\n"} 0444 0 0' >> initramfs.list
+      ''}
       ${genInitCpio}/bin/gen_init_cpio -t 0 initramfs.list > "$out/initramfs.cpio"
       cp initramfs.list "$out/"
     '';
   initramfs = {
     persistent = mkInitramfs "persistent";
+    readonly = mkInitramfs "readonly";
     usb-nbd = mkInitramfs "usb-nbd";
   };
   mkKernel =
@@ -69,7 +73,7 @@ let
     let
       efi = mode == "efi";
       nbd = mode == "usb-nbd";
-      initrd = if nbd then initramfs.usb-nbd else initramfs.persistent;
+      initrd = if efi then initramfs.persistent else initramfs.${mode};
     in
     pkgs.stdenv.mkDerivation {
       pname = "y700-kernel-${mode}";
@@ -165,7 +169,7 @@ let
       '';
       passthru = { inherit mode; };
     };
-  kernels = lib.genAttrs [ "persistent" "usb-nbd" "efi" ] mkKernel;
+  kernels = lib.genAttrs [ "persistent" "readonly" "usb-nbd" "efi" ] mkKernel;
   mkBoot =
     mode:
     pkgs.runCommand "y700-boot-${mode}"
@@ -189,6 +193,8 @@ let
       '';
 in
 {
+  vendorPath = vendor;
+  firmwarePath = firmware;
   inherit
     busybox
     genInitCpio
@@ -196,5 +202,6 @@ in
     kernels
     ;
   boot-persistent = mkBoot "persistent";
+  boot-readonly = mkBoot "readonly";
   boot-usb-nbd = mkBoot "usb-nbd";
 }

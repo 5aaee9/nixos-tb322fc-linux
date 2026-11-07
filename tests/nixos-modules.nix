@@ -117,7 +117,9 @@ assert desktop.users.users.y700.uid == 1000;
 assert desktop.users.users.y700.initialHashedPassword == "";
 assert desktop.services.displayManager.autoLogin.enable;
 assert persistent.users.users.y700.initialHashedPassword == "!";
-assert !persistent.services.displayManager.autoLogin.enable;
+assert persistent.services.displayManager.autoLogin.enable;
+assert persistent.fileSystems."/".fsType == "btrfs";
+assert desktop.fileSystems."/".fsType == "ext4";
 pkgs.runCommand "y700-nixos-module-contracts"
   {
     receipt = builtins.toJSON evaluated;

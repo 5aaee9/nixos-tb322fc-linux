@@ -3,6 +3,9 @@
   inputs,
   project,
   stockBoot,
+  linuxKernel,
+  uefiProvider,
+  uefiDtb,
 }:
 let
   patches = "${project}/vendor/tb322fc-linux/patches/kshimc";
@@ -21,14 +24,16 @@ let
         chmod -R u+w "$out"
         cd "$out"
         python - ${patches} <<'PY'
-        import hashlib,json,sys
+        import hashlib,json,subprocess,sys
         from pathlib import Path
         directory=Path(sys.argv[1])
         manifest=json.loads((directory/"sources.json").read_text())
         for item in manifest["patches"]:
             assert hashlib.sha256((directory/item["file"]).read_bytes()).hexdigest()==item["sha256"]
+        for item in manifest["patches"]:
+            subprocess.run(["git", "apply", str(directory/item["file"])], check=True)
         PY
-        git apply ${patches}/0001-tb322fc-menu-diagnostic.patch
+        cp ${project}/vendor/tb322fc-linux/diagnostics/boot-stage.h vendor/kshim/src/include/y700_boot_stage.h
         cp -R ${inputs.picolibc-src} vendor/kshim/lib/picolibc
         mkdir -p vendor/kshim/third_party
         cp -R ${inputs.lvgl-src} vendor/kshim/third_party/lvgl
@@ -78,10 +83,12 @@ let
       ''
         ${environment}
         cmake -S ${source}/vendor/kshim/tests -B build -G Ninja -DKSHIM_TEST_SANITIZERS=ON
-        cmake --build build --target tb322fc_diagnostic_test -j"$NIX_BUILD_CORES"
+        cmake --build build --target tb322fc_diagnostic_test mmu_test linux_inplace_test -j"$NIX_BUILD_CORES"
         ASAN_OPTIONS=detect_leaks=0 ./build/tb322fc_diagnostic_test
+        ASAN_OPTIONS=detect_leaks=0 ./build/mmu_test
+        ASAN_OPTIONS=detect_leaks=0 ./build/linux_inplace_test
         mkdir -p "$out"
-        cp build/tb322fc_diagnostic_test "$out/"
+        cp build/tb322fc_diagnostic_test build/mmu_test build/linux_inplace_test "$out/"
       '';
   runtime =
     pkgs.runCommand "kshimc-tb322fc-runtime"
@@ -132,6 +139,32 @@ let
         test -x ${menuCheck}/tb322fc_diagnostic_test
         python ${project}/nix/builders/pack-kshimc.py ${stockBoot} ${runtime} "$out"
       '';
+  imageLinux =
+    pkgs.runCommand "boot-kshimc-tb322fc-linux-ram"
+      {
+        nativeBuildInputs = [ python packer ];
+        preferLocalBuild = true;
+        allowSubstitutes = false;
+      }
+      ''
+        test -x ${menuCheck}/tb322fc_diagnostic_test
+        python ${project}/nix/builders/pack-kshimc.py ${stockBoot} ${runtime} "$out" \
+          --linux ${linuxKernel}
+      '';
+  mkUefiImage = { provider ? uefiProvider, dtb ? uefiDtb, installable ? false }:
+    pkgs.runCommand "boot-kshimc-tb322fc-uefi-${if installable then "installed" else "ram"}"
+      {
+        nativeBuildInputs = [ python packer ];
+        preferLocalBuild = true;
+        allowSubstitutes = false;
+      }
+      ''
+        test -x ${menuCheck}/linux_inplace_test
+        python ${project}/nix/builders/pack-kshimc.py ${stockBoot} ${runtime} "$out" \
+          --uefi ${provider} --uefi-dtb ${dtb} \
+          ${pkgs.lib.optionalString installable "--installable"}
+      '';
+  imageUefi = mkUefiImage { };
 in
 {
   inherit
@@ -140,5 +173,8 @@ in
     menuCheck
     runtime
     image
+    imageLinux
+    imageUefi
+    mkUefiImage
     ;
 }

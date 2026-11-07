@@ -1,0 +1,119 @@
+Subject: [PATCH] Expose bounded UEFI handoff diagnostics without changing fallback
+
+Use the shared allocation-free stage renderer. Keep error evidence for six
+seconds, clear the active-UEFI flag on fallback, and draw before prepare_boot.
+
+--- a/vendor/kshim/src/core/main.c
++++ b/vendor/kshim/src/core/main.c
+@@ -14,6 +14,8 @@
+ #include <dt.h>
+ #include <initrd.h>
+ #include <qcom_dt.h>
++#include <framebuffer.h>
++#include <y700_boot_stage.h>
+ #include <qcom_nv.h>
+ #include <menu_locale.h>
+ #include <qcom_reboot.h>
+@@ -510,6 +512,25 @@
+     }
+ }
+ 
++/* Menu teardown already disabled the MMU; retain physical scanout evidence. */
++static void kshim_uefi_stage(unsigned stage, int status)
++{
++#if CONFIG_KSHIM_FRAMEBUFFER && defined(CONFIG_KSHIM_DIAG_MARKER) && \
++    CONFIG_KSHIM_DIAG_MARKER
++    const struct kshim_resources *r = kshim_resources_get();
++    kshim_framebuffer_t fb;
++    if (!r || r->splash_status ||
++        kshim_fb_init(&fb, &r->framebuffer) != KSHIM_FB_OK || fb.bpp != 32)
++        return;
++    (void)y700_stage_draw(fb.render_address, fb.frame_size,
++                         fb.width, fb.height, fb.stride, 0, 0, stage, status);
++    kshim_fb_sync();
++#else
++    (void)stage;
++    (void)status;
++#endif
++}
++
+ int kshim_main(
+     uint64_t device_tree_address,
+     uint64_t kernel_arg1,
+@@ -862,10 +883,12 @@
+         kshim_boot_metrics_record_once(KSHIM_BOOT_STAGE_HANDOFF);
+         const MANIFEST_ENTRY *entry = view.entries[selected_index];
+         const char uefi_name[] = "UEFI (RAM)";
+-        const bool uefi_entry =
++        bool uefi_entry =
+             entry->type == MF_ENTRY_TYPE_LINUX &&
+             entry->name_len == sizeof(uefi_name) - 1 &&
+             !memcmp(entry->name, uefi_name, sizeof(uefi_name) - 1);
++        if (uefi_entry)
++            kshim_uefi_stage(1, 0);
+         int linux_inplace_status = 0;
+         if (entry->type == MF_ENTRY_TYPE_LINUX &&
+             !(entry->flags & (MF_ENTRY_FLAG_BASE_IMAGE | MF_ENTRY_FLAG_COPY)) &&
+@@ -888,11 +911,16 @@
+                     : NULL,
+             };
+             linux_inplace_status = kshim_linux_inplace_check(&context);
++            if (uefi_entry)
++                kshim_uefi_stage(2, linux_inplace_status);
+             if (linux_inplace_status) {
++                if (uefi_entry)
++                    (void)delay(6000000);
+                 printf("Linux RAM handoff rejected (%d); booting Android\n",
+                        linux_inplace_status);
+                 selected_index = 0;
+                 entry = view.entries[0];
++                uefi_entry = false;
+             }
+         }
+         if ((entry->flags & MF_ENTRY_FLAG_BASE_IMAGE) &&
+@@ -912,6 +940,8 @@
+              * DTB keep the original bootloader DT pointer. */
+             int status = memory_status;
+             const char *handoff_stage = "capture";
++            if (uefi_entry)
++                kshim_uefi_stage(3, status);
+             if (status == 0) {
+                 handoff_stage = "memory";
+                 status = dt_memory_apply(
+@@ -923,6 +953,8 @@
+                     sizeof(HandoffDtb),
+                     MemoryOverlay,
+                     sizeof(MemoryOverlay));
++                if (uefi_entry)
++                    kshim_uefi_stage(4, status);
+             }
+ 
+             if (status == 0) {
+@@ -1325,6 +1357,10 @@
+ #endif
+ 
+             if (status != 0) {
++                if (uefi_entry)
++                    kshim_uefi_stage(5, status);
++                if (uefi_entry)
++                    (void)delay(6000000);
+                 char report[81];
+                 int n = snprintf(report, sizeof(report),
+                                  "m15:s=%s:c=%d:a=%d:d=%s",
+@@ -1395,12 +1431,16 @@
+         }
+ 
+         if (entry->type == MF_ENTRY_TYPE_LINUX) {
++            if (uefi_entry)
++                kshim_uefi_stage(6, 0);
+             uint64_t entry_offset = entry->flags & MF_ENTRY_FLAG_BASE_IMAGE
+                 ? 4 : entry->entry_offset;
+             printf("Booting ");
+             print_entry_name(entry);
+             printf(" at 0x%lx with DTB at 0x%lx\n",
+                    linux_base + entry->offset, selected_device_tree);
++            if (uefi_entry)
++                kshim_uefi_stage(7, 0);
+             prepare_boot();
+             arm64_boot_linux(linux_base + entry->offset,
+                              selected_device_tree, entry_offset);
