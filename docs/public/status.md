@@ -29,9 +29,21 @@ init_boot/vendor_boot/dtbo, ESP and slot a are retained.
 The menu defaults to Linux after ten seconds and retains the exact original
 Android kernel and selectable Android entry. This installed-image test
 validates Linux startup; it has not repeated an Android round trip or
-physical screen/audio acceptance. The EFI UCM fallback is included, but
-Wi-Fi association and physical speaker output remain subject to the
-peripheral limitations recorded below. Suspend remains disabled.
+physical screen/audio acceptance. The EFI UCM fallback is included;
+physical speaker output still requires confirmation. Suspend remains
+disabled.
+
+After entering the Wi-Fi credential locally in GNOME, this installed
+generation passes 5 GHz WPA3/SAE authentication, association, DHCP and DNS.
+Twenty gateway pings have zero packet loss, and HTTPS requests explicitly
+bound to Wi-Fi return HTTP 200 from both a test page and the Nix cache.
+NTP synchronizes successfully. The profile has autoconnect enabled and a
+root-owned mode-0600 keyfile on the writable Btrfs root. Before local
+credential entry, this installed system had no saved wireless profile;
+the earlier RAM trial's profile had not been persisted. No driver,
+firmware or authentication workaround was needed. Cold-boot reconnection,
+suspend recovery and throughput/endurance remain untested; the earlier
+RAM-session SAE failure below remains historical evidence.
 
 EFI media is still embedded in the boot image. Independent generation
 deployment to the disk ESP and physical key input in systemd-boot are not
