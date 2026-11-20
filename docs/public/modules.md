@@ -87,8 +87,11 @@ USB debug access is optional:
 Here `y700` is the flake input in scope; alternatively add the development
 module to the consuming flake's `modules` list. The key is public and will
 enter the Nix store. An empty key installs no root authorized key. This
-profile listens on the development USB address and disables password
-authentication; choose your own SSH configuration when not using it.
+profile listens on `[::]:22` and `0.0.0.0:22`, including the development USB
+address `192.168.42.2`; it disables password authentication.
+Consumers can override `services.openssh.listenAddresses`. The debug key is
+still source-restricted to the USB host, so configure a separate LAN
+account/key when remote access is required.
 
 ## Build and deploy
 

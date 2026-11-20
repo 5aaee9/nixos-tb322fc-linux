@@ -38,6 +38,28 @@ let
       { y700.debugPublicKey = ""; }
     ];
   };
+  customListener = debug.extendModules {
+    modules = [
+      { services.openssh.listenAddresses = [ { addr = "192.0.2.1"; } ]; }
+    ];
+  };
+  nativeSsh = debug.extendModules {
+    modules = [
+      { nixpkgs.hostPlatform = lib.mkForce pkgs.stdenv.hostPlatform.system; }
+    ];
+  };
+  generations = debug.extendModules {
+    modules = [
+      self.nixosModules.generation-boot
+      {
+        y700.generationBoot = {
+          enable = true;
+          artifacts = pkgs.writeTextDir "metadata.json" "{}";
+          installer = pkgs.writeShellScriptBin "y700-install-generations" "exit 0";
+        };
+      }
+    ];
+  };
   gnomeOnly = lib.nixosSystem {
     modules = [
       self.nixosModules.gnome
@@ -56,6 +78,7 @@ let
   c = custom.config;
   d = debug.config;
   g = gnomeOnly.config;
+  e = generations.config;
   base = self.nixosConfigurations.elden.config;
   desktop = self.nixosConfigurations.elden-desktop.config;
   persistent = self.nixosConfigurations.elden-persistent.config;
@@ -70,6 +93,7 @@ let
           headless
           custom
           debug
+          generations
           gnomeOnly
           ;
       };
@@ -79,6 +103,7 @@ assert lib.all withoutDemoUser [
   c
   d
   g
+  e
   base
 ];
 assert h.nixpkgs.hostPlatform.system == "aarch64-linux";
@@ -101,15 +126,19 @@ assert c.services.displayManager.autoLogin.user == "owner";
 assert d.services.displayManager.autoLogin.enable;
 assert d.services.displayManager.autoLogin.user == "owner";
 assert d.services.openssh.enable && !d.services.openssh.settings.PasswordAuthentication;
-assert
-  d.services.openssh.listenAddresses == [
-    {
-      addr = "192.168.42.2";
-      port = 22;
-    }
-  ];
+assert d.services.openssh.listenAddresses == [ ];
+assert d.services.openssh.ports == [ 22 ];
+assert builtins.elem 22 d.networking.firewall.allowedTCPPorts;
+assert customListener.config.services.openssh.listenAddresses == [
+  { addr = "192.0.2.1"; port = null; }
+];
 assert d.users.users.root.openssh.authorizedKeys.keys == [ ];
 assert g.services.desktopManager.gnome.enable && !g.services.openssh.enable;
+assert e.boot.loader.external.enable && !e.boot.loader.systemd-boot.enable;
+assert !e.boot.loader.efi.canTouchEfiVariables;
+assert e.services.displayManager.autoLogin.user == "owner";
+assert e.boot.bootspec.extensions."org.y700.board.v1".selection == "exact-system-and-generation";
+assert e.y700.generationBoot.configurationLimit == 3 && !e.y700.generationBoot.usbDebug;
 assert !(g.services ? y700-power-key);
 assert !g.services.displayManager.autoLogin.enable;
 assert base.services.desktopManager.gnome.enable;
@@ -122,8 +151,14 @@ assert persistent.fileSystems."/".fsType == "btrfs";
 assert desktop.fileSystems."/".fsType == "ext4";
 pkgs.runCommand "y700-nixos-module-contracts"
   {
+    nativeBuildInputs = [ pkgs.openssh.out ];
     receipt = builtins.toJSON evaluated;
   }
   ''
+    sshd -G -f ${nativeSsh.config.environment.etc."ssh/sshd_config".source} > sshd-effective.conf
+    grep -Fxi 'listenaddress [::]:22' sshd-effective.conf
+    grep -Fxi 'listenaddress 0.0.0.0:22' sshd-effective.conf
+    grep -Fxi 'passwordauthentication no' sshd-effective.conf
+    grep -Fxi 'kbdinteractiveauthentication no' sshd-effective.conf
     printf '%s\n' "$receipt" > "$out"
   ''

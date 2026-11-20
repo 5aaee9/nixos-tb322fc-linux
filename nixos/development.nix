@@ -22,14 +22,9 @@ in
       }
     ];
 
-    # Root diagnostics accept only this host over the existing USB link.
+    # An empty address list uses both wildcard listeners, including USB.
     services.openssh.enable = true;
-    services.openssh.listenAddresses = [
-      {
-        addr = "192.168.42.2";
-        port = 22;
-      }
-    ];
+    services.openssh.listenAddresses = lib.mkDefault [ ];
     services.openssh.settings = {
       PermitRootLogin = "prohibit-password";
       PasswordAuthentication = false;
