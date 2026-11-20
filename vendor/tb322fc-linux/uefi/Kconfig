@@ -26,4 +26,10 @@ config Y700_RAM_LAB
 	  Accept QEMU's FDT and expose its serial console. This image must
 	  never be packaged as a tablet candidate.
 
+config Y700_EXTERNAL_MEDIA
+	bool "Read a validated FAT snapshot from the kexec initrd"
+	default n
+	help
+	  Require the fat-v1 device-tree contract. No physical disk is accessed.
+
 endif

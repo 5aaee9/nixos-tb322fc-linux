@@ -9,7 +9,7 @@ out, vendor = map(Path, sys.argv[1:3])
 mode = sys.argv[3]
 image = (out / "Image").read_bytes()
 assert image[56:60] == b"ARM\x64"
-if mode == "efi":
+if mode in ("efi", "bootstrap"):
     pe = struct.unpack_from("<I", image, 0x3C)[0]
     assert image[:2] == b"MZ" and image[pe:pe+4] == b"PE\0\0"
     assert struct.unpack_from("<H", image, pe + 4)[0] == 0xAA64

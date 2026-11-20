@@ -1,0 +1,89 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Read the committed boot snapshot without replaying the Btrfs log.
+export PATH=/bin:/tools
+BB=/bin/busybox
+fail() {
+    echo "Y700_BOOTSTRAP_FAILURE=$*" >> /run/evidence/status
+    echo "Y700_BOOTSTRAP_FAILURE=$*" > /dev/console
+    "$BB" cat /run/evidence/console.txt > /dev/console
+    [ ! -f /run/evidence/kexec-load.txt ] ||
+        "$BB" cat /run/evidence/kexec-load.txt > /dev/console
+    [ ! -f /run/evidence/kexec-exec.txt ] ||
+        "$BB" cat /run/evidence/kexec-exec.txt > /dev/console
+    "$BB" dmesg > /run/evidence/dmesg.txt
+    "$BB" timeout 5 "$BB" umount /newroot 2>/dev/null || true
+    "$BB" sleep 300
+    "$BB" poweroff -f -n
+    while :; do "$BB" sleep 3600; done
+}
+"$BB" --install -s /bin
+mount -t proc proc /proc || exit 1
+mount -t sysfs sysfs /sys || exit 1
+mount -t devtmpfs devtmpfs /dev || exit 1
+mount -t tmpfs -o mode=0700,size=2G tmpfs /run || exit 1
+mkdir -p /run/evidence /newroot
+exec >/run/evidence/console.txt 2>&1
+echo Y700_BOOTSTRAP=v1 > /run/evidence/status
+echo Y700_BOOTSTRAP=v1 > /dev/console
+tr '\000' '\n' </proc/device-tree/compatible | grep -qx lenovo,elden ||
+    fail board
+case "$(uname -r)" in *-y700-bootstrap) ;; *) fail kernel ;; esac
+. /etc/usb-rndis
+printf 'A:192.168.42.1\nD:*\n' >/run/httpd.conf
+httpd -p 192.168.42.2:8080 -h /run/evidence -c /run/httpd.conf || fail httpd
+echo Y700_BOOTSTRAP_USB=v1 > /dev/console
+
+root_device=
+for attempt in $(seq 1 60); do
+    count=0
+    for node in /sys/class/block/sd*; do
+        [ -f "$node/partition" ] || continue
+        grep -qx PARTNAME=rootfs "$node/uevent" || continue
+        root_device=/dev/${node##*/}
+        count=$((count + 1))
+    done
+    [ "$count" -le 1 ] || fail ambiguous-root
+    [ "$count" = 0 ] || break
+    sleep 1
+done
+[ -n "$root_device" ] || fail no-root
+for node in /sys/class/block/sd*; do
+    blockdev --setro "/dev/${node##*/}" || fail protect
+done
+blkid "$root_device" | grep -q 'TYPE="btrfs"' || fail root-type
+mount -t btrfs -o ro,rescue=nologreplay "$root_device" /newroot || fail mount
+[ "$(cat /newroot/etc/y700-rootfs-contract)" = tb322fc-rootfs-v1 ] || fail contract
+snapshot=$(readlink -f /newroot/boot/y700/current) || fail snapshot
+case "$snapshot" in /newroot/boot/y700/snapshots/*) ;; *) fail snapshot-path ;; esac
+[ -f "$snapshot/esp.img" ] && [ ! -L "$snapshot/esp.img" ] || fail image-file
+size=$(stat -c %s "$snapshot/esp.img") || fail image-size
+[ "$size" -ge 33554432 ] && [ "$size" -le 1073741824 ] || fail image-bounds
+cp "$snapshot/esp.img" /run/esp.img || fail copy
+cp "$snapshot/esp.sha256" /run/esp.sha256 || fail checksum-file
+(cd /run && sha256sum -c esp.sha256) || fail checksum
+echo Y700_BOOTSTRAP_SNAPSHOT_VERIFIED=v1 > /dev/console
+cp /sys/firmware/fdt /run/handoff.dtb || fail fdt
+for property in $(fdtget -p /run/handoff.dtb /chosen); do
+    case "$property" in
+        linux,uefi-*|linux,initrd-*|kaslr-seed|rng-seed|bootargs|y700,uefi-packed-range)
+            fdtput -d /run/handoff.dtb /chosen "$property" || fail fdt-clean ;;
+    esac
+done
+fdtput -t s /run/handoff.dtb /chosen y700,external-media fat-v1 || fail fdt-media
+fdtput -t s /run/handoff.dtb /chosen y700,uefi-provider unused || fail fdt-provider
+fdtput -t s /run/handoff.dtb /chosen y700,bootstrap v1 || fail fdt-marker
+umount /newroot || fail unmount
+kexec --debug --kexec-syscall --load /provider.bin --dtb=/run/handoff.dtb --initrd=/run/esp.img \
+    --append="y700.external-media=fat-v1" > /run/evidence/kexec-load.txt 2>&1 ||
+    fail kexec-load
+echo Y700_BOOTSTRAP_KEXEC_LOADED=v1 >> /run/evidence/status
+echo Y700_BOOTSTRAP_KEXEC_LOADED=v1 > /dev/console
+dmesg > /run/evidence/dmesg.txt
+cat /proc/iomem > /run/evidence/iomem.txt
+cp /run/handoff.dtb /run/evidence/handoff.dtb
+# This observation window is bounded; the host can collect the pre-handoff log.
+sleep 8
+echo "" > "$G/UDC" || fail unbind-usb
+kexec --kexec-syscall --exec >> /run/evidence/kexec-exec.txt 2>&1
+fail kexec-returned

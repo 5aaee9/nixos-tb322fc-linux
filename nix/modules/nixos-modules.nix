@@ -1,4 +1,4 @@
-{ ... }:
+{ self, ... }:
 
 {
   flake.nixosModules = {
@@ -14,5 +14,12 @@
     power-key = ../../nixos/power-key.nix;
     usb-nbd = ../../nixos/usb-nbd.nix;
     persistent = ../../nixos/persistent.nix;
+    generation-boot = { lib, pkgs, ... }: {
+      imports = [ ../../nixos/generation-boot.nix ];
+      y700.generationBoot = {
+        artifacts = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.generation-boot-artifacts;
+        installer = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.generation-boot-installer;
+      };
+    };
   };
 }

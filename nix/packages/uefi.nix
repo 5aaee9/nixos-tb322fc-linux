@@ -62,7 +62,13 @@ let
       ${lib.optionalString persistent "--persistent-root"}
   '';
   mkNixosMedia = generation: mkNixosMediaWith { inherit generation; };
-  mkProvider = { media, lab ? false }:
+  externalMedia = pkgs.runCommand "y700-external-media-placeholder" {} ''
+    mkdir -p "$out"
+    truncate -s 4096 "$out/ramfs.img"
+    gzip -n -c "$out/ramfs.img" > "$out/ramfs.img.gz"
+    echo '{"schema":1,"media":"kexec-initrd-fat-v1","physical_storage":false}' > "$out/metadata.json"
+  '';
+  mkProvider = { media ? externalMedia, lab ? false, external ? false }:
     cross.buildUBoot {
       version = builtins.substring 0 12 pin.revision;
       src = source;
@@ -70,17 +76,18 @@ let
       pname = "y700-ram-uefi${lib.optionalString lab "-qemu-lab"}";
       filesToInstall = [ "u-boot.bin" "u-boot" ".config" "u-boot.map" ];
       SOURCE_DATE_EPOCH = "1793664000";
-      extraConfig = lib.optionalString lab "CONFIG_Y700_RAM_LAB=y\n";
+      extraConfig = lib.optionalString lab "CONFIG_Y700_RAM_LAB=y\n" +
+        lib.optionalString external "CONFIG_Y700_EXTERNAL_MEDIA=y\nCONFIG_FS_FAT_HANDLE_SECTOR_SIZE_MISMATCH=y\n";
       postPatch = ''
         python ${project}/nix/builders/prepare-uefi.py ${overlay} ${media}
         patchShebangs tools scripts
       '';
       postConfigure = ''
         make olddefconfig
-        python ${project}/nix/builders/check-uefi.py ${if lab then "lab" else "target"}
+        python ${project}/nix/builders/check-uefi.py ${if lab then "lab" else "target"} ${if external then "external" else "embedded"}
       '';
       postBuild = ''
-        python ${project}/nix/builders/check-uefi.py ${if lab then "lab" else "target"}
+        python ${project}/nix/builders/check-uefi.py ${if lab then "lab" else "target"} ${if external then "external" else "embedded"}
       '';
       postInstall = ''
         cp ${overlay}/source.json "$out/source.json"
@@ -112,6 +119,7 @@ let
 in {
   inherit mkProvider mkNixosMedia mkNixosMediaWith mediaA mediaB source memoryCheck targetDtb targetMedia diagnosticInitrd;
   target = mkProvider { media = targetMedia; };
+  external = mkProvider { external = true; };
   labA = mkProvider { media = mediaA; lab = true; };
   labB = mkProvider { media = mediaB; lab = true; };
 }

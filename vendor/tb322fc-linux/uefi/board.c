@@ -32,7 +32,7 @@ extern uintptr_t y700_incoming_fdt;
 /* These must survive the pre-relocation BSS clear. */
 static struct y700_memory memory __section(".data") = {0};
 static unsigned char control_fdt[0x10000] __aligned(8) __section(".data") = {0};
-static struct mm_region regions[Y700_MAX_RANGES + 5] __section(".data") = {{0}};
+static struct mm_region regions[Y700_MAX_RANGES + 6] __section(".data") = {{0}};
 struct mm_region *mem_map = regions;
 static struct {
 	uintptr_t base;
@@ -109,6 +109,7 @@ int board_fdt_blob_setup(void **fdtp)
 	if (!IS_ENABLED(CONFIG_Y700_RAM_LAB) &&
 	    !y700_probe_framebuffer(incoming, (uintptr_t)incoming,
 				    (struct y700_range){(uintptr_t)_start, image_size},
+				    IS_ENABLED(CONFIG_Y700_EXTERNAL_MEDIA) ? Y700_MEMORY_EXTERNAL : 0,
 				    &memory)) {
 		early_fb.base = memory.framebuffer.start;
 		early_fb.size = memory.framebuffer.size;
@@ -120,7 +121,9 @@ int board_fdt_blob_setup(void **fdtp)
 	}
 	need(y700_parse_memory(incoming, (uintptr_t)incoming,
 			      (struct y700_range){(uintptr_t)_start, image_size},
-			      IS_ENABLED(CONFIG_Y700_RAM_LAB), &memory));
+			      (IS_ENABLED(CONFIG_Y700_RAM_LAB) ? Y700_MEMORY_LAB : 0) |
+			      (IS_ENABLED(CONFIG_Y700_EXTERNAL_MEDIA) ? Y700_MEMORY_EXTERNAL : 0),
+			      &memory));
 	y700_early_stage(2, 0);
 	need(y700_psci_method(incoming, IS_ENABLED(CONFIG_Y700_RAM_LAB), &method));
 	need(fdt_create_empty_tree(control_fdt, sizeof(control_fdt)));
@@ -196,6 +199,17 @@ int dram_init_banksize(void)
 	return 0;
 }
 
+int ft_board_setup(void *fdt, struct bd_info *bd)
+{
+	/*
+	 * arch_fixup_fdt() exports gd->dram, which deliberately excludes the
+	 * scanout and firmware. A later kexec needs the original physical RAM
+	 * description too. EFI allocation still uses the restricted gd->dram;
+	 * keep every reserved-memory node and reservation in this OS tree.
+	 */
+	return y700_fixup_os_memory(fdt, &memory);
+}
+
 static void map(size_t index, struct y700_range r, uint64_t attrs)
 {
 	regions[index] = (struct mm_region){
@@ -226,6 +240,8 @@ void enable_caches(void)
 	original_fdt.size = ALIGN(original_fdt.size, 4096);
 	if (!y700_range_contains(packed, original_fdt))
 		map(i++, original_fdt, normal);
+	if (IS_ENABLED(CONFIG_Y700_EXTERNAL_MEDIA))
+		map(i++, memory.media, normal);
 	if (IS_ENABLED(CONFIG_Y700_RAM_LAB))
 		map(i++, (struct y700_range){0x09000000, 4096},
 		    PTE_BLOCK_MEMTYPE(MT_DEVICE_NGNRNE) |
@@ -250,27 +266,34 @@ int board_late_init(void)
 
 	/* Video probing registers stdio; board_init() is too early for that. */
 	y700_stage_paint(4, 0);
-	printf("Y700_RAM_UEFI_PROVIDER=v1 mode=%s physical-storage=absent variables=volatile\n",
-	       IS_ENABLED(CONFIG_Y700_RAM_LAB) ? "qemu-lab" : "tb322fc");
+	printf("Y700_RAM_UEFI_PROVIDER=v1 mode=%s media=%s physical-storage=absent variables=volatile\n",
+	       IS_ENABLED(CONFIG_Y700_RAM_LAB) ? "qemu-lab" : "tb322fc",
+	       IS_ENABLED(CONFIG_Y700_EXTERNAL_MEDIA) ? "external-fat-v1" : "embedded");
 	env_set("stdin", "serial");
 	env_set("stdout", IS_ENABLED(CONFIG_Y700_RAM_LAB) ? "serial" : "vidconsole");
 	env_set("stderr", IS_ENABLED(CONFIG_Y700_RAM_LAB) ? "serial" : "vidconsole");
 	y700_stage_paint(5, 0);
-	ret = lmb_alloc_mem(LMB_MEM_ALLOC_ANY, SZ_2M, &ramfs,
-			    Y700_RAMFS_SIZE, LMB_NOOVERWRITE);
-	if (ret) {
-		y700_stage_paint(5, ret);
-		goto failed;
-	}
-	if (gunzip((void *)ramfs, Y700_RAMFS_SIZE,
-		   (unsigned char *)y700_ramfs_start, &compressed) ||
-	    compressed != Y700_RAMFS_SIZE) {
-		ret = -EINVAL;
-		y700_stage_paint(6, ret);
-		goto failed;
+	if (IS_ENABLED(CONFIG_Y700_EXTERNAL_MEDIA)) {
+		ramfs = memory.media.start;
+		/* The memory parser excluded this buffer before any allocation. */
+		ret = blkmap_create_ramdisk("y700-ram", ramfs, memory.media.size, &block);
+	} else {
+		ret = lmb_alloc_mem(LMB_MEM_ALLOC_ANY, SZ_2M, &ramfs,
+				    Y700_RAMFS_SIZE, LMB_NOOVERWRITE);
+		if (ret) {
+			y700_stage_paint(5, ret);
+			goto failed;
+		}
+		if (gunzip((void *)ramfs, Y700_RAMFS_SIZE,
+			   (unsigned char *)y700_ramfs_start, &compressed) ||
+		    compressed != Y700_RAMFS_SIZE) {
+			ret = -EINVAL;
+			y700_stage_paint(6, ret);
+			goto failed;
+		}
+		ret = blkmap_create_ramdisk("y700-ram", ramfs, Y700_RAMFS_SIZE, &block);
 	}
 	y700_stage_paint(6, 0);
-	ret = blkmap_create_ramdisk("y700-ram", ramfs, Y700_RAMFS_SIZE, &block);
 	if (ret) {
 		y700_stage_paint(7, ret);
 		goto failed;
@@ -304,7 +327,16 @@ static int do_y700boot(struct cmd_tbl *cmdtp, int flag, int argc, char *const ar
 	status = 0;
 	if (!IS_ENABLED(CONFIG_Y700_RAM_LAB))
 		status = fdt_setprop_inplace(fdt, fdt_path_offset(fdt, "/chosen"),
-					    "y700,uefi-provider", "ram-v1", 7);
+					    "y700,uefi-provider",
+					    IS_ENABLED(CONFIG_Y700_EXTERNAL_MEDIA) ?
+					    "ext-v1" : "ram-v1", 7);
+	if (!status && IS_ENABLED(CONFIG_Y700_EXTERNAL_MEDIA)) {
+		/* The EFI stub will publish the selected Linux initrd, not this FAT. */
+		int chosen = fdt_path_offset(fdt, "/chosen");
+		status = fdt_delprop(fdt, chosen, "linux,initrd-start");
+		if (!status)
+			status = fdt_delprop(fdt, chosen, "linux,initrd-end");
+	}
 	if (status) {
 		y700_stage_paint(9, status);
 		goto reset;

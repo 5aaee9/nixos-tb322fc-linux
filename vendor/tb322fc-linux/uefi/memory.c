@@ -156,9 +156,11 @@ static int framebuffer(const void *fdt, struct y700_memory *m)
 }
 
 static int parse_layout(const void *fdt, uintptr_t address,
-			struct y700_range image, int lab, struct y700_memory *m)
+			struct y700_range image, int flags, struct y700_memory *m)
 {
 	int n, chosen, bytes;
+	int lab = flags & Y700_MEMORY_LAB;
+	int external = flags & Y700_MEMORY_EXTERNAL;
 	const char *p;
 
 	memset(m, 0, sizeof(*m));
@@ -184,7 +186,7 @@ static int parse_layout(const void *fdt, uintptr_t address,
 		return -3;
 	chosen = fdt_path_offset(fdt, "/chosen");
 	p = fdt_getprop(fdt, chosen, "y700,uefi-packed-range", &bytes);
-	if (lab) {
+	if (lab || external) {
 		m->packed = image;
 	} else {
 		if (!p || bytes != 16)
@@ -200,15 +202,36 @@ static int parse_layout(const void *fdt, uintptr_t address,
 	    overlap(image, m->fdt) ||
 	    (overlap(m->packed, m->fdt) && !y700_range_contains(m->packed, m->fdt)))
 		return -4;
+	p = fdt_getprop(fdt, chosen, "y700,external-media", &bytes);
+	if (external) {
+		const char *end;
+		int end_bytes;
+		if (!p || bytes != 7 || memcmp(p, "fat-v1", 7))
+			return -4;
+		p = fdt_getprop(fdt, chosen, "linux,initrd-start", &bytes);
+		end = fdt_getprop(fdt, chosen, "linux,initrd-end", &end_bytes);
+		if (!p || !end || bytes != 8 || end_bytes != 8 ||
+		    be64(end) <= be64(p))
+			return -4;
+		m->media = (struct y700_range){be64(p), be64(end) - be64(p)};
+		if ((m->media.start & 4095) || (m->media.size & 4095) ||
+		    m->media.size < 32 * 1024 * 1024 ||
+		    m->media.size > 1024ULL * 1024 * 1024 ||
+		    !in_ram(m, m->media) || overlap(m->media, m->packed) ||
+		    overlap(m->media, m->fdt))
+			return -4;
+	} else if (p) {
+		return -4;
+	}
 	memcpy(m->free, m->banks, m->bank_count * sizeof(*m->banks));
 	m->free_count = m->bank_count;
 	return 0;
 }
 
 int y700_probe_framebuffer(const void *fdt, uintptr_t address,
-			   struct y700_range image, struct y700_memory *m)
+			   struct y700_range image, int flags, struct y700_memory *m)
 {
-	int result = parse_layout(fdt, address, image, 0, m);
+	int result = parse_layout(fdt, address, image, flags, m);
 
 	return result ? result : framebuffer(fdt, m);
 }
@@ -234,13 +257,13 @@ int y700_psci_method(const void *fdt, int lab, const char **method)
 }
 
 int y700_parse_memory(const void *fdt, uintptr_t address,
-		      struct y700_range image, int lab, struct y700_memory *m)
+		      struct y700_range image, int flags, struct y700_memory *m)
 {
 	int n, chosen, bytes, count, i;
 	const char *p;
 	uint64_t start, size;
 	size_t j, k;
-	int result = parse_layout(fdt, address, image, lab, m);
+	int result = parse_layout(fdt, address, image, flags, m);
 
 	if (result)
 		return result;
@@ -268,7 +291,17 @@ int y700_parse_memory(const void *fdt, uintptr_t address,
 				return -5;
 		}
 	}
-	/* The original Android initrd remains live until kShimC hands off. */
+	if (!(flags & Y700_MEMORY_LAB) && framebuffer(fdt, m))
+		return -6;
+	if (flags & Y700_MEMORY_EXTERNAL) {
+		/* Kexec media must not overlap any firmware or scanout reservation. */
+		for (j = 0; j < m->free_count; j++)
+			if (y700_range_contains(m->free[j], m->media))
+				break;
+		if (j == m->free_count)
+			return -5;
+	}
+	/* The input initrd is either Android's ramdisk or the external FAT. */
 	p = fdt_getprop(fdt, chosen, "linux,initrd-start", &bytes);
 	if (p) {
 		const char *q;
@@ -279,8 +312,6 @@ int y700_parse_memory(const void *fdt, uintptr_t address,
 				  (struct y700_range){be64(p), be64(q) - be64(p)}))
 			return -5;
 	}
-	if (!lab && framebuffer(fdt, m))
-		return -6;
 	for (j = 0; j < m->free_count; j++)
 		if (y700_range_contains(m->free[j], image))
 			break;
@@ -297,4 +328,32 @@ int y700_parse_memory(const void *fdt, uintptr_t address,
 			m->free[k - 1] = tmp;
 		}
 	return m->free_count ? 0 : -7;
+}
+
+int y700_fixup_os_memory(void *fdt, const struct y700_memory *m)
+{
+	fdt64_t reg[Y700_MAX_RANGES * 2];
+	int node, bytes;
+	const char *type;
+	size_t i;
+
+	if (!fdt || !m || !m->bank_count || m->bank_count > Y700_MAX_RANGES ||
+	    fdt_check_header(fdt) || fdt_address_cells(fdt, 0) != 2 ||
+	    fdt_size_cells(fdt, 0) != 2)
+		return -FDT_ERR_BADVALUE;
+	/* ARM's preceding fixup has already created the OS memory node. */
+	node = fdt_path_offset(fdt, "/memory");
+	if (node < 0)
+		return node;
+	type = fdt_getprop(fdt, node, "device_type", &bytes);
+	if (!type || bytes != 7 || memcmp(type, "memory", 7))
+		return -FDT_ERR_BADVALUE;
+	for (i = 0; i < m->bank_count; i++) {
+		if (!y700_range_valid(m->banks[i]) ||
+		    ((m->banks[i].start | m->banks[i].size) & 4095))
+			return -FDT_ERR_BADVALUE;
+		reg[2 * i] = cpu_to_fdt64(m->banks[i].start);
+		reg[2 * i + 1] = cpu_to_fdt64(m->banks[i].size);
+	}
+	return fdt_setprop(fdt, node, "reg", reg, m->bank_count * 16);
 }

@@ -87,12 +87,118 @@ static void test_psci(void)
 	assert(y700_psci_method(fdt, 0, NULL) == -8);
 }
 
+static void external_media(uint64_t start, uint64_t size)
+{
+	int chosen = fdt_path_offset(fdt, "/chosen");
+	assert(!fdt_setprop_string(fdt, chosen, "y700,external-media", "fat-v1"));
+	assert(!fdt_setprop_u64(fdt, chosen, "linux,initrd-start", start));
+	assert(!fdt_setprop_u64(fdt, chosen, "linux,initrd-end", start + size));
+}
+
+static void test_external(void)
+{
+	make_tree(0);
+	external_media(0x50000000, 0x10000000);
+	assert(parse(0) == -4);
+	assert(!parse(Y700_MEMORY_EXTERNAL));
+	assert(map.media.start == 0x50000000 && map.media.size == 0x10000000);
+	assert(!free_contains(0x50000000) && !free_contains(0x5fffffff));
+	assert(free_contains(0x60000000));
+	assert(!y700_probe_framebuffer(fdt, 0x41000000,
+				       (struct y700_range){0x43000000, 0x1000000},
+				       Y700_MEMORY_EXTERNAL, &map));
+	assert(!fdt_add_mem_rsv(fdt, 0x50001000, 0x1000));
+	assert(parse(Y700_MEMORY_EXTERNAL) == -5);
+	/* The valid scanout remains available to paint this early refusal. */
+	assert(!y700_probe_framebuffer(fdt, 0x41000000,
+				       (struct y700_range){0x43000000, 0x1000000},
+				       Y700_MEMORY_EXTERNAL, &map));
+	assert(map.framebuffer.start == 0x80000000);
+	make_tree(0);
+	external_media(0x50000001, 0x2000000);
+	assert(parse(Y700_MEMORY_EXTERNAL) == -4);
+	external_media(0x50000000, 0x2000200);
+	assert(parse(Y700_MEMORY_EXTERNAL) == -4);
+	external_media(0x50000000, 0x40001000);
+	assert(parse(Y700_MEMORY_EXTERNAL) == -4);
+	external_media(0x43000000, 0x2000000);
+	assert(parse(Y700_MEMORY_EXTERNAL) == -4);
+	external_media(0x80000000, 0x2000000);
+	assert(parse(Y700_MEMORY_EXTERNAL) == -5);
+	external_media(0x40000000, 0x2000000);
+	assert(parse(Y700_MEMORY_EXTERNAL) == -4);
+	make_tree(0);
+	assert(parse(Y700_MEMORY_EXTERNAL) == -4);
+	make_tree(1);
+	external_media(0x50000000, 0x2000000);
+	assert(!parse(Y700_MEMORY_LAB | Y700_MEMORY_EXTERNAL));
+}
+
+static void test_os_memory_handoff(void)
+{
+	struct y700_memory first, before;
+	fdt64_t reg[Y700_MAX_RANGES * 2];
+	fdt64_t reservation[] = {cpu_to_fdt64(0x70000000), cpu_to_fdt64(0x1000)};
+	int n, memory_node;
+
+	make_tree(0);
+	assert(!fdt_add_mem_rsv(fdt, 0x60000000, 0x1000));
+	n = fdt_add_subnode(fdt, 0, "reserved-memory");
+	assert(n >= 0);
+	assert(!fdt_setprop_u32(fdt, n, "#address-cells", 2));
+	assert(!fdt_setprop_u32(fdt, n, "#size-cells", 2));
+	n = fdt_add_subnode(fdt, n, "firmware@70000000");
+	assert(n >= 0);
+	assert(!fdt_setprop(fdt, n, "reg", reservation, sizeof(reservation)));
+	assert(!parse(0));
+	first = map;
+	before = first;
+
+	/* U-Boot's ARM fixup publishes gd->dram: the first provider's free map.
+	 * The captured bootstrap FDT likewise lost its reserved framebuffer. */
+	memory_node = fdt_path_offset(fdt, "/memory");
+	assert(memory_node >= 0);
+	for (size_t i = 0; i < first.free_count; i++) {
+		reg[2 * i] = cpu_to_fdt64(first.free[i].start);
+		reg[2 * i + 1] = cpu_to_fdt64(first.free[i].size);
+	}
+	assert(!fdt_setprop(fdt, memory_node, "reg", reg, first.free_count * 16));
+	external_media(0x50000000, 0x8000000);
+	assert(y700_parse_memory(fdt, 0x47000000,
+				(struct y700_range){0x48000000, 0x1000000},
+				Y700_MEMORY_EXTERNAL, &map) == -6);
+	assert(y700_probe_framebuffer(fdt, 0x47000000,
+				     (struct y700_range){0x48000000, 0x1000000},
+				     Y700_MEMORY_EXTERNAL, &map));
+
+	assert(!y700_fixup_os_memory(fdt, &first));
+	assert(!memcmp(&first, &before, sizeof(first)));
+	assert(!y700_parse_memory(fdt, 0x47000000,
+				 (struct y700_range){0x48000000, 0x1000000},
+				 Y700_MEMORY_EXTERNAL, &map));
+	assert(!free_contains(0x50000000) && !free_contains(0x60000000) &&
+	       !free_contains(0x70000000) && !free_contains(0x80000000));
+	assert(free_contains(0x59000000));
+	/* Conflicting firmware reservations remain fatal after publication. */
+	external_media(0x60000000, 0x8000000);
+	assert(y700_parse_memory(fdt, 0x47000000,
+				(struct y700_range){0x48000000, 0x1000000},
+				Y700_MEMORY_EXTERNAL, &map) == -5);
+	assert(y700_fixup_os_memory(fdt, NULL) == -FDT_ERR_BADVALUE);
+	first.bank_count = 0;
+	assert(y700_fixup_os_memory(fdt, &first) == -FDT_ERR_BADVALUE);
+	first.bank_count = Y700_MAX_RANGES + 1;
+	assert(y700_fixup_os_memory(fdt, &first) == -FDT_ERR_BADVALUE);
+}
+
 int main(void)
 {
 	struct y700_range r[256] = {{0x1000, 0x5000}};
 	size_t count = 1;
 	int n;
 	test_psci();
+	test_external();
+	test_os_memory_handoff();
 	assert(!y700_subtract(r, &count, (struct y700_range){0x2800, 1}));
 	assert(count == 2 && r[0].start == 0x1000 && r[0].size == 0x1000 &&
 	       r[1].start == 0x3000 && r[1].size == 0x3000);
@@ -106,7 +212,7 @@ int main(void)
 	make_tree(0);
 	assert(!y700_probe_framebuffer(fdt, 0x41000000,
 				       (struct y700_range){0x43000000, 0x1000000},
-				       &map));
+				       0, &map));
 	assert(map.framebuffer.start == 0x80000000);
 	assert(!parse(0));
 	assert(y700_parse_memory(fdt, 0x80001000,
@@ -137,7 +243,7 @@ int main(void)
 	assert(parse(0) == -6);
 	assert(y700_probe_framebuffer(fdt, 0x41000000,
 				      (struct y700_range){0x43000000, 0x1000000},
-				      &map));
+				      0, &map));
 	make_tree(0);
 	n = fdt_add_subnode(fdt, 0, "reserved-memory");
 	assert(n >= 0);
@@ -150,7 +256,7 @@ int main(void)
 	/* A reservation refusal must remain visible without weakening allocation. */
 	assert(!y700_probe_framebuffer(fdt, 0x41000000,
 				       (struct y700_range){0x43000000, 0x1000000},
-				       &map));
+				       0, &map));
 	assert(parse(0) == -5);
 	assert(!fdt_setprop_string(fdt, n, "status", "disabled"));
 	assert(!parse(0));

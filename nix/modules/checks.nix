@@ -64,6 +64,8 @@
             export KSHIM_PACKER=${y700.kshim.packer}/bin/MultiBootKernelPatcher
             python -m unittest discover -s tests -p 'test_kshimc_image.py' -v
             python -m unittest discover -s tests -p 'test_efi_generation.py' -v
+            python -m unittest discover -s tests -p 'test_boot_generations.py' -v
+            python -m unittest discover -s tests -p 'test_bootstrap_firmware.py' -v
             python -m unittest discover -s tests -p 'test_uefi_nixos_evidence.py' -v
             python -m unittest discover -s tests -p 'test_power_key_session.py' -v
             touch "$out"

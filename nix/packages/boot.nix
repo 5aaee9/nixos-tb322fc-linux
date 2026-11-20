@@ -71,7 +71,7 @@ let
   mkKernel =
     mode:
     let
-      efi = mode == "efi";
+      efi = mode == "efi" || mode == "bootstrap";
       nbd = mode == "usb-nbd";
       initrd = if efi then initramfs.persistent else initramfs.${mode};
     in
@@ -141,6 +141,16 @@ let
                 --set-str INITRAMFS_SOURCE ${initrd}/initramfs.cpio
             ''
         }
+        ${lib.optionalString (mode == "bootstrap") ''
+          # PMIC GLINK needs DRM and the ADSP transport for USB-C. Keep those
+          # dependencies, but do not let the native display driver reset scanout.
+          scripts/config --enable DRM --enable DRM_SIMPLEDRM --enable DRM_FBDEV_EMULATION \
+            --enable REMOTEPROC --enable QCOM_Q6V5_PAS --enable QCOM_PMIC_GLINK \
+            --enable UCSI_PMIC_GLINK --disable DRM_MSM --disable DRM_PANEL_NOVATEK_NT36536 \
+            --disable BACKLIGHT_AW99706 --disable SOUND --disable WLAN --disable BT \
+            --disable MEDIA_SUPPORT --disable INPUT_TOUCHSCREEN \
+            --set-str LOCALVERSION "-y700-bootstrap"
+        ''}
         while IFS= read -r setting; do
           [[ -z "$setting" || "$setting" == \#* ]] && continue
           [[ "$setting" =~ ^CONFIG_[A-Z0-9_]+=y$ ]]
@@ -169,7 +179,7 @@ let
       '';
       passthru = { inherit mode; };
     };
-  kernels = lib.genAttrs [ "persistent" "readonly" "usb-nbd" "efi" ] mkKernel;
+  kernels = lib.genAttrs [ "persistent" "readonly" "usb-nbd" "efi" "bootstrap" ] mkKernel;
   mkBoot =
     mode:
     pkgs.runCommand "y700-boot-${mode}"

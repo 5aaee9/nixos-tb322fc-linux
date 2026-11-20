@@ -5,6 +5,7 @@ import struct
 import sys
 
 lab = sys.argv[1] == "lab"
+external = len(sys.argv) > 2 and sys.argv[2] == "external"
 config = {}
 for line in Path(".config").read_text().splitlines():
     if line.startswith("CONFIG_") and "=" in line:
@@ -14,7 +15,7 @@ for line in Path(".config").read_text().splitlines():
 required = ("TARGET_Y700_RAM", "EFI_LOADER", "EFI_BINARY_EXEC", "CMD_BOOTEFI_BINARY",
             "BLK", "BLKMAP", "FS_FAT", "EFI_VARIABLE_NO_STORE", "ENV_IS_NOWHERE",
             "POSITION_INDEPENDENT", "LINUX_KERNEL_IMAGE_HEADER",
-            "OF_BOARD", "OF_HAS_PRIOR_STAGE", "OF_OMIT_DTB")
+            "OF_BOARD", "OF_BOARD_SETUP", "OF_HAS_PRIOR_STAGE", "OF_OMIT_DTB")
 forbidden = ("UFS", "SCSI", "MMC", "NVME", "USB", "PCI", "MTD", "SPI_FLASH",
              "IDE", "AHCI", "SATA", "NET", "FASTBOOT", "DFU", "FAT_WRITE",
              "EFI_VARIABLE_FILE_STORE", "EFI_VARIABLE_SF_STORE",
@@ -28,6 +29,10 @@ for key in forbidden:
         raise SystemExit(f"Prohibited provider feature: CONFIG_{key}")
 if (config.get("Y700_RAM_LAB") == "y") != lab:
     raise SystemExit("Provider lab/target contract mismatch")
+if (config.get("Y700_EXTERNAL_MEDIA") == "y") != external:
+    raise SystemExit("Provider external/embedded contract mismatch")
+if external and config.get("FS_FAT_HANDLE_SECTOR_SIZE_MISMATCH") != "y":
+    raise SystemExit("External provider must support the existing 4096-byte FAT")
 if config.get("BOOTCOMMAND") != '"y700boot"':
     raise SystemExit("Provider boot command changed")
 if Path("u-boot.bin").exists():
@@ -40,6 +45,7 @@ if Path("u-boot.bin").exists():
         "scope": "QEMU lab only" if lab else "unvalidated TB322FC RAM candidate",
         "image_bytes": len(image), "image_memory_bytes": size,
         "physical_storage_drivers": "absent",
+        "media_contract": "kexec-initrd-fat-v1" if external else "embedded-fat",
         "persistent_variables": "disabled", "capsules": "disabled",
         "source_date_epoch": 1793664000,
     }, indent=2) + "\n")

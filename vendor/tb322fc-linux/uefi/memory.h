@@ -18,7 +18,7 @@ struct y700_memory {
 	struct y700_range banks[Y700_MAX_RANGES];
 	struct y700_range free[Y700_MAX_RANGES];
 	size_t bank_count, free_count;
-	struct y700_range packed, fdt, framebuffer;
+	struct y700_range packed, fdt, framebuffer, media;
 	uint32_t width, height, stride;
 	char format[16];
 };
@@ -28,9 +28,14 @@ int y700_subtract(struct y700_range *ranges, size_t *count,
 		  struct y700_range reserved);
 /* Diagnostic-only scanout validation; does not authorize RAM allocation. */
 int y700_probe_framebuffer(const void *fdt, uintptr_t fdt_address,
-			   struct y700_range image, struct y700_memory *memory);
+			   struct y700_range image, int flags,
+			   struct y700_memory *memory);
 int y700_parse_memory(const void *fdt, uintptr_t fdt_address,
-		      struct y700_range image, int lab,
+		      struct y700_range image, int flags,
 		      struct y700_memory *memory);
+/* Publish physical RAM to the OS without changing the allocator's free map. */
+int y700_fixup_os_memory(void *fdt, const struct y700_memory *memory);
+#define Y700_MEMORY_LAB 1
+#define Y700_MEMORY_EXTERNAL 2
 int y700_psci_method(const void *fdt, int lab, const char **method);
 #endif

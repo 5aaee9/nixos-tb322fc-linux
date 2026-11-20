@@ -116,6 +116,17 @@
           "tests/boot_stage_test.c"
         ];
       };
+      generationBoot = import ../packages/generation-boot.nix {
+        inherit pkgs inputs boot uefi;
+        project = sourceFor [
+          "tools/build-bootstrap-initrd.py"
+          "tools/install-boot-generations.py"
+          "vendor/tb322fc-linux/uefi/bootstrap-init"
+          "vendor/tb322fc-linux/initramfs/usb-rndis"
+          "vendor/tb322fc-linux/configs/cmdline.txt"
+          "vendor/tb322fc-linux/firmware-tb322fc-prc.json"
+        ];
+      };
     in
     {
       _module.args.y700 = {
@@ -132,6 +143,7 @@
         inherit (efi) mkGeneration mkEsp;
         inherit (uefi) mkProvider mkNixosMedia mkNixosMediaWith;
         inherit (kshim) mkUefiImage;
+        mkBootArtifacts = generationBoot.mkArtifacts;
       };
       packages = {
         readonly-runner = diagnostics.runner;
@@ -162,6 +174,10 @@
         kernel-readonly = boot.kernels.readonly;
         kernel-usb-nbd = boot.kernels.usb-nbd;
         kernel-efi = boot.kernels.efi;
+        kernel-bootstrap = boot.kernels.bootstrap;
+        initramfs-bootstrap = generationBoot.initrd;
+        generation-boot-artifacts = generationBoot.artifacts;
+        generation-boot-installer = generationBoot.installer;
         initramfs-persistent = boot.initramfs.persistent;
         initramfs-readonly = boot.initramfs.readonly;
         initramfs-usb-nbd = boot.initramfs.usb-nbd;
@@ -191,6 +207,7 @@
         uefi-lab-a = uefi.labA;
         uefi-lab-b = uefi.labB;
         uefi-target = uefi.target;
+        uefi-external = uefi.external;
         uefi-target-dtb = uefi.targetDtb;
         efi-lab-tools = import ../packages/lab-tools.nix {
           inherit pkgs;
