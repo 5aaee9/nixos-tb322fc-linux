@@ -15,6 +15,7 @@ in
   };
 
   config = {
+    boot.kernelParams = [ "y700.usb-debug=1" ];
     assertions = [
       {
         assertion = publicKey == "" || lib.hasPrefix "ssh-ed25519 " publicKey;

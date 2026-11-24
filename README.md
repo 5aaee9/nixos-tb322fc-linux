@@ -63,6 +63,12 @@ nix run .#build-aarch64 -- .#rootfs-desktop --out-link result-rootfs
 Import the matching own-tablet firmware first as described in the build guide.
 On an ARM64 build host, `nix build .#rootfs-desktop` works directly.
 
+The Y700 device module enables native systemd-boot publication on the disk
+ESP by default. On a fresh builder, import the verified board EFI Image as
+`y700-efi-Image` and the device-specific stage1 archive as `y700-persistent.cpio`
+with `nix-store --add-fixed sha256 FILENAME`. Their hashes are checked by the
+module. This publishes menu entries; it does not replace the Android boot image.
+
 For your own deployment, import `nixosModules.default` (or `y700`) and
 optionally `nixosModules.gnome`, then add your own configuration:
 

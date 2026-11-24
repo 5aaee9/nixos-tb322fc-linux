@@ -24,6 +24,7 @@ in {
     };
   };
   config = lib.mkIf cfg.enable {
+    boot.loader.systemd-boot.enable = false;
     assertions = [{
       assertion = config.nixpkgs.hostPlatform.system == "aarch64-linux";
       message = "Y700 generation boot requires aarch64-linux.";

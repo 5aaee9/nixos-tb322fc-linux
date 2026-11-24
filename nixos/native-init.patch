@@ -1,0 +1,27 @@
+--- init
++++ init
+@@ -35,6 +35,7 @@
+     case "$option" in
+         root=*) selector=${option#root=} ;;
+         y700.usb-debug=1) usb_debug=1 ;;
++        init=*) selected_init=${option#init=}; native_count=$((${native_count:-0} + 1)) ;;
+         y700.system=*) selected_system=${option#y700.system=}; selection_count=$((selection_count + 1)) ;;
+         y700.generation=*) selected_generation=${option#y700.generation=}; generation_count=$((generation_count + 1)) ;;
+     esac
+@@ -44,11 +45,11 @@
+     *) fail "this candidate requires root=PARTLABEL=rootfs" ;;
+ esac
+ if [ -f /etc/y700-efi-system ]; then
+-    [ "$selection_count" = 1 ] && [ "$generation_count" = 1 ] ||
+-        fail "EFI entry must select exactly one system and generation"
+-    [ "$selected_system" = "$("$BB" cat /etc/y700-efi-system)" ] &&
+-        [ "$selected_generation" = "$("$BB" cat /etc/y700-efi-generation)" ] ||
+-        fail "EFI entry does not match its initrd"
++    [ "${native_count:-0}" = 1 ] && [ "$selection_count" = 0 ] &&
++        [ "$generation_count" = 0 ] || fail "ambiguous native EFI entry"
++    selected_system=$("$BB" cat /etc/y700-efi-system) || fail "missing closure binding"
++    [ "$selected_init" = "$selected_system/init" ] ||
++        fail "native EFI entry does not match its initrd"
+     [ "$("$BB" cat /sys/firmware/efi/fw_platform_size)" = 64 ] || fail "not a 64-bit EFI boot"
+ else
+     [ "$selection_count" = 0 ] && [ "$generation_count" = 0 ] ||
