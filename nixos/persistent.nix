@@ -1,6 +1,27 @@
 { config, lib, pkgs, ... }:
 
 {
+  boot.loader.efi.efiSysMountPoint = lib.mkDefault "/efi";
+  fileSystems.${config.boot.loader.efi.efiSysMountPoint} = {
+    device = "/run/y700-esp/device";
+    fsType = "vfat";
+    noCheck = true;
+    options = [ "nofail" "rw" "umask=0077" "nodev" "nosuid" "noexec"
+      "x-systemd.requires=y700-esp-guard.service" ];
+  };
+  systemd.services.y700-esp-guard = {
+    description = "Permit writes to the unique onboard Linux ESP";
+    after = [ "systemd-udev-trigger.service" ];
+    unitConfig = { DefaultDependencies = false; StopWhenUnneeded = true; };
+    path = [ pkgs.util-linux pkgs.coreutils pkgs.gnugrep pkgs.systemd ];
+    serviceConfig = { Type = "oneshot"; RemainAfterExit = true; RuntimeDirectory = "y700-esp"; };
+    script = builtins.readFile ./esp-guard.sh;
+    preStop = ''
+      blockdev --setro /run/y700-esp/device
+      test "$(blockdev --getro /run/y700-esp/device)" = 1
+    '';
+  };
+
   # Internal storage removes the NBD dependency, but suspend/resume still
   # needs a separate hardware test. The power key continues to toggle display.
   systemd.sleep.settings.Sleep = {
