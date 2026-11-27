@@ -41,7 +41,8 @@ in pkgs.buildLinux {
     DRM_PANEL_NOVATEK_NT36536 = yes;
     BACKLIGHT_AW99706 = yes;
     EXTRA_FIRMWARE_DIR = freeform (toString firmware);
-    BUILTIN_DTB = no;
+    BUILTIN_DTB = yes;
+    BUILTIN_DTB_NAME = freeform "qcom/sm8750-lenovo-elden";
     EFI = yes;
     EFI_STUB = yes;
     EFI_ARMSTUB_DTB_LOADER = yes;
