@@ -51,4 +51,12 @@
   # Android remains the installed boot chain. Rebuilds must not install a
   # loader or change EFI variables until the separate boot-chain work passes.
   boot.loader.efi.canTouchEfiVariables = lib.mkDefault false;
+
+  # Netconsole streams printk to the host over USB, but keep a local copy
+  # as a fallback. A one-second journald sync interval bounds the evidence
+  # loss if the kernel dies before its final UDP datagrams leave the wire.
+  services.journald.extraConfig = lib.mkDefault ''
+    SyncIntervalSec=1
+  '';
+
 }

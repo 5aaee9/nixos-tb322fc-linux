@@ -44,3 +44,20 @@ net_if=$("$BB" cat "$G/functions/rndis.usb0/ifname") || fail "USB interface name
 [ -e "/sys/class/net/$net_if" ] || fail "USB interface missing"
 "$BB" ip link set "$net_if" up || fail "USB interface up"
 "$BB" ip addr add 192.168.42.2/24 dev "$net_if" || fail "USB interface address"
+
+# Forward printk to the host over this link as soon as the address exists.
+# Hard resets leave no time for journald or ramoops; the host-side UDP
+# listener is the only evidence that survives them. Failure here must not
+# block boot, so every step is best-effort.
+if [ -d /sys/kernel/config/netconsole ]; then
+    NC=/sys/kernel/config/netconsole/usbdebug
+    if "$BB" mkdir "$NC" 2>/dev/null; then
+        echo "$net_if" > "$NC/dev_name" 2>/dev/null
+        echo 192.168.42.2 > "$NC/local_ip" 2>/dev/null
+        echo 6665 > "$NC/local_port" 2>/dev/null
+        echo 192.168.42.1 > "$NC/remote_ip" 2>/dev/null
+        echo 6666 > "$NC/remote_port" 2>/dev/null
+        echo 02:00:00:00:00:02 > "$NC/remote_mac" 2>/dev/null
+        echo 1 > "$NC/enabled" 2>/dev/null
+    fi
+fi
