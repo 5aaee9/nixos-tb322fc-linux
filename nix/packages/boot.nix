@@ -10,6 +10,12 @@ let
   kernelManifest = (builtins.fromJSON (builtins.readFile "${vendor}/sources.json")).kernel;
   kernelPatches = map (patch: "${vendor}/${patch}") kernelManifest.patches;
   cross = pkgs.pkgsCross.aarch64-multiplatform;
+  # binutils-2.46 on aarch64 fails to link dynamic glibc via its ld script when
+  # compiling host tools. Force static host linking there. x86_64 dynamic linking
+  # is fine, so only use -static on aarch64 build hosts.
+  isAarch64Host = pkgs.stdenv.buildPlatform.isAarch64;
+  hostStaticFlags = if isAarch64Host then "-static -O2" else "-O2";
+  hostStaticLdFlags = if isAarch64Host then "-static" else "";
   busybox = cross.stdenv.mkDerivation {
     pname = "y700-initramfs-busybox";
     version = "1.36.1";
@@ -25,9 +31,11 @@ let
       runHook preBuild
       cp ${vendor}/configs/busybox.config .config
       make ARCH=arm64 CROSS_COMPILE=${cross.stdenv.cc.targetPrefix} \
-        HOSTCC=${pkgs.stdenv.cc}/bin/cc oldconfig < /dev/null
+        HOSTCC=${pkgs.stdenv.cc}/bin/cc HOSTCFLAGS="${hostStaticFlags}" HOSTLDFLAGS="${hostStaticLdFlags}" \
+        oldconfig < /dev/null
       make ARCH=arm64 CROSS_COMPILE=${cross.stdenv.cc.targetPrefix} \
-        HOSTCC=${pkgs.stdenv.cc}/bin/cc -j"$NIX_BUILD_CORES" busybox
+        HOSTCC=${pkgs.stdenv.cc}/bin/cc HOSTCFLAGS="${hostStaticFlags}" HOSTLDFLAGS="${hostStaticLdFlags}" \
+        -j"$NIX_BUILD_CORES" busybox
       ${cross.stdenv.cc.targetPrefix}readelf -h busybox | grep -q AArch64
       if ${cross.stdenv.cc.targetPrefix}readelf -l busybox | grep -q INTERP; then
         echo "initramfs BusyBox must be static" >&2; exit 1

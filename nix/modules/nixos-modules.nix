@@ -1,7 +1,15 @@
-{ self, ... }:
+{ self, inputs, ... }:
 
 {
   flake.nixosModules = {
+    managed-kernel = { pkgs, ... }: {
+      y700.useKernelPackages = true;
+      boot.kernelPackages = pkgs.linuxPackagesFor (import ../packages/managed-kernel.nix {
+        inherit pkgs;
+        src = inputs.kernel-src;
+        firmware = self.packages.${pkgs.stdenv.hostPlatform.system}.firmware;
+      });
+    };
     default = ../../nixos/y700.nix;
     y700 = ../../nixos/y700.nix;
     gnome = ../../nixos/gnome.nix;

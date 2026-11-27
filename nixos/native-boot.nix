@@ -1,6 +1,6 @@
 { config, lib, options, pkgs, ... }:
 let
-  kernel = pkgs.requireFile {
+  kernel = if config.y700.useKernelPackages then "${config.boot.kernelPackages.kernel}/${config.system.boot.loader.kernelFile}" else pkgs.requireFile {
     name = "y700-efi-Image";
     sha256 = "a9717aec56fe40e1308227914a5e085788ec8d6b6318bf1e52810526c27d2f3e";
     message = "Import the verified Y700 EFI kernel with nix-store --add-fixed sha256.";
@@ -17,8 +17,10 @@ let
   '';
   boardParams = lib.filter (arg: !(lib.hasPrefix "init=" arg || lib.hasPrefix "panic=" arg || arg == "efi=noruntime"))
     (lib.splitString " " (lib.removeSuffix "\n" (builtins.readFile ../vendor/tb322fc-linux/configs/cmdline.txt)));
-in lib.mkIf config.boot.loader.systemd-boot.enable {
-  boot.loader.systemd-boot = { configurationLimit = lib.mkDefault 1; editor = lib.mkDefault false; };
+in {
+  options.y700.useKernelPackages = lib.mkEnableOption "boot the kernel selected by boot.kernelPackages from the ESP";
+  config = lib.mkIf config.boot.loader.systemd-boot.enable {
+  boot.loader.systemd-boot = { configurationLimit = lib.mkDefault 2; editor = lib.mkDefault false; };
   boot.loader.efi.canTouchEfiVariables = false;
   boot.bootspec.writer = options.boot.bootspec.writer.default + "\n" + ''
     (
@@ -30,9 +32,10 @@ in lib.mkIf config.boot.loader.systemd-boot.enable {
       printf '%s\n' "$out" > etc/y700-efi-system
       touch -d @1 init etc/y700-efi-system
       { cat ${stage1}; printf '%s\n' init etc/y700-efi-system | ${pkgs.buildPackages.cpio}/bin/cpio --quiet --reproducible --owner=0:0 -o -H newc; } | ${pkgs.buildPackages.gzip}/bin/gzip -n > "$out/y700-initrd.gz"
-      ${pkgs.buildPackages.jq}/bin/jq --arg kernel '${kernel}' --arg initrd "$out/y700-initrd.gz" --argjson params '${builtins.toJSON (boardParams ++ [ "panic=30" ] ++ lib.optional (builtins.elem "y700.usb-debug=1" config.boot.kernelParams) "y700.usb-debug=1")}' \
+      ${pkgs.buildPackages.jq}/bin/jq --arg kernel '${kernel}' --arg initrd "$out/y700-initrd.gz" --argjson params ${lib.escapeShellArg (builtins.toJSON (lib.unique (boardParams ++ [ "panic=30" ] ++ config.boot.kernelParams)))} \
         '."org.nixos.bootspec.v1" |= (.kernel=$kernel | .initrd=$initrd | .kernelParams=$params)' "$out/boot.json" > boot.json
       mv boot.json "$out/boot.json"
     )
   '';
+  };
 }
