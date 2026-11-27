@@ -6,6 +6,10 @@ single `patch`, to the Git index and verifies the exact resulting tree.
 
 - [`kernel/`](kernel/README.md): device support and dependencies applied to
   the official Linux base, with original attribution preserved.
+- `uboot/0001-physical-esp-honor-menu-timeout.patch`: removes the fixed
+  15-second override from the physical-ESP provider overlay, so the installed
+  systemd-boot menu configuration decides the wait. Apply to the physical-ESP
+  provider packaging tree, not the embedded RAM-FAT provider in this repository.
 - `hexagonrpc.patch`: writable Linux sensor registry state and safe filesystem
   descriptor/alias handling.
 - `iio-sensor-proxy.patch`: SSC accelerometer discovery and claims made while

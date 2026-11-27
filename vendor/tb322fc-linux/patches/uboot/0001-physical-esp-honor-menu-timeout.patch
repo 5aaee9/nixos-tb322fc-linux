@@ -1,0 +1,12 @@
+--- a/overlay/board.c
++++ b/overlay/board.c
+@@ -691,3 +691,1 @@
+-        static const efi_guid_t loader_guid = EFI_GUID(0x4a67b082,0x0a4c,0x41cf,0xb6,0xc7,0x44,0x0b,0x29,0xbb,0x8c,0x4f);
+-        static const u16 timeout[] = u"15";
+         char path[256];
+@@ -731,5 +729,2 @@
+         efi_set_bootdev("scsi", device, path, (void *)loader, loader_size);
+-        if (efi_set_variable_int(u"LoaderConfigTimeoutOneShot", &loader_guid,
+-                EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
+-                sizeof(timeout), timeout, true) != EFI_SUCCESS) goto failed;
+         snprintf(command, sizeof(command), "bootefi %lx %lx", (ulong)loader, (ulong)memory.fdt.start);
