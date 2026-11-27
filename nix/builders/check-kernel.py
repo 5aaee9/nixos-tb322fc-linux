@@ -16,9 +16,10 @@ required.add(f'CONFIG_CMDLINE="{cmdline}"')
 if mode in ("efi", "bootstrap"):
     required.update({"CONFIG_EFI=y", "CONFIG_EFI_STUB=y", "CONFIG_SCSI_VIRTIO=y",
                      'CONFIG_INITRAMFS_SOURCE=""'})
-    for disabled in ("CONFIG_CMDLINE_FORCE=y", "CONFIG_BUILTIN_DTB=y"):
-        if disabled in config:
-            raise ValueError("EFI kernel must not contain " + disabled)
+    if "CONFIG_CMDLINE_FORCE=y" in config:
+        raise ValueError("EFI kernel must not contain CONFIG_CMDLINE_FORCE=y")
+    required.update({"CONFIG_BUILTIN_DTB=y",
+                     'CONFIG_BUILTIN_DTB_NAME="qcom/sm8750-lenovo-elden"'})
     if mode == "bootstrap":
         required.update({"CONFIG_KEXEC=y", "CONFIG_BTRFS_FS=y", "CONFIG_DRM_SIMPLEDRM=y",
                          "CONFIG_DRM_FBDEV_EMULATION=y"})

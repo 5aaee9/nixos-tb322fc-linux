@@ -140,7 +140,7 @@ let
               cmdline=""
               scripts/config --enable EFI --enable EFI_STUB --enable EFI_ARMSTUB_DTB_LOADER \
                 --disable CMDLINE_FORCE --enable CMDLINE_FROM_BOOTLOADER --set-str CMDLINE "" \
-                --disable BUILTIN_DTB --set-str INITRAMFS_SOURCE "" --set-str LOCALVERSION "-y700-efi" \
+                --enable BUILTIN_DTB --set-str BUILTIN_DTB_NAME "qcom/sm8750-lenovo-elden" --set-str INITRAMFS_SOURCE "" --set-str LOCALVERSION "-y700-efi" \
                 --disable EFI_VARS_PSTORE --enable SCSI_VIRTIO
             ''
           else
